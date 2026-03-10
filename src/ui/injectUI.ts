@@ -1,559 +1,460 @@
 /**
- * Webview UI - aiDocExtra Panel
- * Provides a sidebar webview for managing messages, generating docs, and publishing.
+ * Webview UI 注入模块
+ * Webview UI injection - provides the Continue-Doc panel UI
  */
 
 import * as vscode from "vscode";
 import { MessageStore } from "../chat/messageStore";
-import { DocMessage } from "../types";
+import { DocMessage, WebviewMessage } from "../types";
+import { getTexts } from "../i18n";
 
-export class AiDocPanel implements vscode.WebviewViewProvider {
-  public static readonly viewType = "aiDocExtra.panel";
+export class InjectUI implements vscode.WebviewViewProvider {
+  public static readonly viewType = "continue-doc.panel";
 
-  private view?: vscode.WebviewView;
-  private _onAction = new vscode.EventEmitter<string>();
-  public readonly onAction = this._onAction.event;
+  private outputChannel: vscode.OutputChannel;
+  private messageStore: MessageStore;
+  private language: string;
+  private webviewView: vscode.WebviewView | undefined;
+  private onGenerateDoc: () => Promise<void>;
+  private onPublish: () => Promise<void>;
+  private onOpenConfig: () => Promise<void>;
+  private onRefresh: () => Promise<void>;
+  private storeListener: { dispose: () => void } | undefined;
+  private webviewReady = false;
 
   constructor(
-    private extensionUri: vscode.Uri,
-    private messageStore: MessageStore
+    outputChannel: vscode.OutputChannel,
+    messageStore: MessageStore,
+    language: string,
+    callbacks: {
+      onGenerateDoc: () => Promise<void>;
+      onPublish: () => Promise<void>;
+      onOpenConfig: () => Promise<void>;
+      onRefresh: () => Promise<void>;
+    }
   ) {
-    // Update the webview when messages change
-    this.messageStore.onMessagesChanged(() => {
-      this.updateWebview();
-    });
+    this.outputChannel = outputChannel;
+    this.messageStore = messageStore;
+    this.language = language;
+    this.onGenerateDoc = callbacks.onGenerateDoc;
+    this.onPublish = callbacks.onPublish;
+    this.onOpenConfig = callbacks.onOpenConfig;
+    this.onRefresh = callbacks.onRefresh;
   }
 
-  public resolveWebviewView(
+  /**
+   * 更新语言
+   */
+  updateLanguage(language: string): void {
+    this.language = language;
+    this.updateWebview();
+  }
+
+  /**
+   * 实现 WebviewViewProvider 接口
+   */
+  resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ): void {
-    this.view = webviewView;
+    this.webviewView = webviewView;
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this.extensionUri],
     };
 
-    webviewView.webview.html = this.getHtmlContent();
-
-    // Handle messages from the webview
-    webviewView.webview.onDidReceiveMessage((message) => {
+    // 监听来自 webview 的消息
+    webviewView.webview.onDidReceiveMessage((message: WebviewMessage) => {
       this.handleWebviewMessage(message);
     });
+
+    // 监听消息存储变化
+    this.storeListener?.dispose();
+    this.storeListener = this.messageStore.onDidChange(() => {
+      this.updateWebview();
+    });
+
+    // 重置 ready 状态，进行首次全量渲染
+    this.webviewReady = false;
+    this.updateWebview();
+
+    this.outputChannel.appendLine("[InjectUI] Webview resolved.");
   }
 
-  /** Handle messages from the webview */
-  private handleWebviewMessage(message: any): void {
-    switch (message.command) {
-      case "addMessage":
-        this.messageStore.addMessage(
-          message.role,
-          message.content,
-          message.model
-        );
+  /**
+   * 处理来自 webview 的消息
+   */
+  private async handleWebviewMessage(message: WebviewMessage): Promise<void> {
+    switch (message.type) {
+      case "toggleMessage":
+        this.messageStore.toggleMessage(message.payload?.id);
         break;
-
-      case "toggleInclude":
-        this.messageStore.toggleInclude(message.id);
+      case "toggleAll":
+        this.messageStore.toggleAll(message.payload?.include);
         break;
-
-      case "removeMessage":
-        this.messageStore.removeMessage(message.id);
-        break;
-
-      case "selectAll":
-        this.messageStore.setAllInclude(true);
-        break;
-
-      case "deselectAll":
-        this.messageStore.setAllInclude(false);
-        break;
-
-      case "clearAll":
-        this.messageStore.clear();
-        break;
-
       case "generateDoc":
-        this._onAction.fire("generateDoc");
+        await this.onGenerateDoc();
         break;
-
       case "publish":
-        this._onAction.fire("publish");
+        await this.onPublish();
         break;
-
       case "openConfig":
-        this._onAction.fire("openConfig");
+        await this.onOpenConfig();
         break;
-
-      case "pasteFromClipboard":
-        this.pasteFromClipboard(message.role);
+      case "ready":
+        this.webviewReady = true;
+        await this.onRefresh();
+        this.updateWebview();
         break;
+      default:
+        this.outputChannel.appendLine(
+          `[InjectUI] Unknown message type: ${message.type}`
+        );
     }
   }
 
-  /** Paste content from clipboard as a message */
-  private async pasteFromClipboard(
-    role: "user" | "assistant"
-  ): Promise<void> {
-    const text = await vscode.env.clipboard.readText();
-    if (text.trim()) {
-      this.messageStore.addMessage(role, text.trim());
-      vscode.window.showInformationMessage(
-        `aiDocExtra: ${role === "user" ? "User" : "Assistant"} message added from clipboard.`
-      );
-    } else {
-      vscode.window.showWarningMessage(
-        "aiDocExtra: Clipboard is empty."
-      );
+  /**
+   * 更新 webview 内容
+   * 使用 postMessage 进行增量更新以保留滚动位置；
+   * 仅在首次或强制时使用全量 HTML 替换。
+   */
+  updateWebview(): void {
+    if (!this.webviewView) {
+      return;
     }
-  }
 
-  /** Update the webview with current messages */
-  private updateWebview(): void {
-    if (this.view) {
-      this.view.webview.postMessage({
-        command: "updateMessages",
-        messages: this.messageStore.getAllMessages(),
-        includedCount: this.messageStore.getIncludedCount(),
-        totalCount: this.messageStore.getTotalCount(),
+    const messages = this.messageStore.getMessages();
+    const stats = this.messageStore.getStats();
+    const allSelected = this.messageStore.isAllSelected();
+    const texts = getTexts(this.language);
+
+    // 尝试通过 postMessage 增量更新
+    if (this.webviewReady) {
+      this.webviewView.webview.postMessage({
+        type: "messagesUpdated",
+        payload: { messages, stats, allSelected, texts },
       });
+      return;
     }
+
+    // 首次全量渲染
+    this.webviewView.webview.html = this.getHtml(
+      messages,
+      stats,
+      allSelected,
+      texts
+    );
   }
 
-  /** Generate the HTML content for the webview */
-  private getHtmlContent(): string {
-    const nonce = this.getNonce();
+  /**
+   * 生成 webview HTML
+   */
+  private getHtml(
+    messages: DocMessage[],
+    stats: { total: number; selected: number },
+    allSelected: boolean,
+    texts: any
+  ): string {
+    const messageListHtml = messages
+      .map(
+        (msg) => `
+        <div class="message-item" data-id="${msg.id}">
+          <label class="checkbox-wrapper">
+            <input type="checkbox" ${msg.include ? "checked" : ""} 
+                   onchange="toggleMessage('${msg.id}')" />
+            <span class="role-tag ${msg.role}">${msg.role === "user" ? texts.user : texts.assistant}</span>
+            <span class="content-preview">${this.escapeHtml(this.truncate(msg.content, 80))}</span>
+          </label>
+        </div>`
+      )
+      .join("");
 
-    return `<!DOCTYPE html>
-<html lang="en">
+    return /* html */ `<!DOCTYPE html>
+<html lang="${this.language}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">
-    :root {
-      --bg: var(--vscode-editor-background);
-      --fg: var(--vscode-editor-foreground);
-      --border: var(--vscode-panel-border);
-      --btn-bg: var(--vscode-button-background);
-      --btn-fg: var(--vscode-button-foreground);
-      --btn-hover: var(--vscode-button-hoverBackground);
-      --input-bg: var(--vscode-input-background);
-      --input-fg: var(--vscode-input-foreground);
-      --input-border: var(--vscode-input-border);
-      --badge-bg: var(--vscode-badge-background);
-      --badge-fg: var(--vscode-badge-foreground);
-      --success: #4caf50;
-      --warning: #ff9800;
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      color: var(--fg);
-      background: var(--bg);
+      font-family: var(--vscode-font-family, sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      color: var(--vscode-foreground);
+      background: var(--vscode-sideBar-background);
       padding: 8px;
     }
 
-    .header {
+    /* 操作栏 */
+    .action-bar {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .action-btn {
+      flex: 1;
+      min-width: 80px;
+      padding: 6px 8px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      text-align: center;
+      transition: opacity 0.2s;
+    }
+
+    .action-btn:hover { opacity: 0.85; }
+
+    .btn-generate {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+
+    .btn-publish {
+      background: var(--vscode-button-secondaryBackground, #3a3d41);
+      color: var(--vscode-button-secondaryForeground, #fff);
+    }
+
+    .btn-config {
+      background: transparent;
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-input-border, #555);
+    }
+
+    /* 全选栏 */
+    .select-all-bar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .header h2 {
-      font-size: 14px;
-      font-weight: 600;
-    }
-
-    .badge {
-      background: var(--badge-bg);
-      color: var(--badge-fg);
-      border-radius: 10px;
-      padding: 2px 8px;
-      font-size: 11px;
-    }
-
-    .actions {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-
-    .btn {
-      background: var(--btn-bg);
-      color: var(--btn-fg);
-      border: none;
-      padding: 6px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 12px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .btn:hover {
-      background: var(--btn-hover);
-    }
-
-    .btn.secondary {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid var(--border);
-    }
-
-    .btn.secondary:hover {
-      background: var(--input-bg);
-    }
-
-    .btn.primary {
-      background: var(--success);
-      color: white;
-    }
-
-    .btn.small {
-      padding: 3px 8px;
-      font-size: 11px;
-    }
-
-    .section-title {
-      font-size: 12px;
-      font-weight: 600;
-      margin: 12px 0 6px 0;
-      text-transform: uppercase;
-      opacity: 0.8;
-    }
-
-    .add-message-area {
-      margin-bottom: 12px;
-    }
-
-    .input-group {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 6px;
-    }
-
-    textarea {
-      width: 100%;
-      min-height: 60px;
-      background: var(--input-bg);
-      color: var(--input-fg);
-      border: 1px solid var(--input-border);
-      border-radius: 3px;
       padding: 6px 8px;
-      font-family: var(--vscode-font-family);
-      font-size: 12px;
-      resize: vertical;
-    }
-
-    textarea:focus {
-      outline: 1px solid var(--btn-bg);
-    }
-
-    .role-selector {
-      display: flex;
-      gap: 4px;
+      border-bottom: 1px solid var(--vscode-panel-border, #333);
       margin-bottom: 6px;
     }
 
-    .role-btn {
-      flex: 1;
-      padding: 4px;
-      text-align: center;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 11px;
-      background: transparent;
-      color: var(--fg);
-    }
-
-    .role-btn.active {
-      background: var(--btn-bg);
-      color: var(--btn-fg);
-      border-color: var(--btn-bg);
-    }
-
-    .message-list {
-      margin-top: 8px;
-    }
-
-    .message-item {
+    .select-all-bar label {
       display: flex;
-      gap: 8px;
-      padding: 8px;
-      margin-bottom: 6px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      align-items: flex-start;
-    }
-
-    .message-item.excluded {
-      opacity: 0.5;
-    }
-
-    .message-item input[type="checkbox"] {
-      margin-top: 3px;
+      align-items: center;
+      gap: 6px;
       cursor: pointer;
-    }
-
-    .message-content {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .message-role {
-      font-size: 10px;
       font-weight: 600;
-      text-transform: uppercase;
-      margin-bottom: 2px;
-      color: var(--btn-bg);
+      font-size: 12px;
     }
 
-    .message-text {
-      font-size: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 120px;
+    .message-stats {
+      font-size: 11px;
+      opacity: 0.7;
+    }
+
+    /* 消息列表 */
+    .message-list {
+      max-height: calc(100vh - 140px);
       overflow-y: auto;
     }
 
-    .message-meta {
-      font-size: 10px;
-      opacity: 0.6;
-      margin-top: 4px;
+    .message-item {
+      padding: 4px 0;
+      border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
     }
 
-    .message-actions {
+    .checkbox-wrapper {
       display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .delete-btn {
-      background: transparent;
-      border: none;
-      color: var(--fg);
+      align-items: center;
+      gap: 6px;
       cursor: pointer;
-      opacity: 0.5;
-      font-size: 14px;
-      padding: 2px;
+      white-space: nowrap;
+      overflow: hidden;
     }
 
-    .delete-btn:hover {
-      opacity: 1;
-      color: #f44336;
+    .checkbox-wrapper input[type="checkbox"] {
+      flex-shrink: 0;
+      cursor: pointer;
     }
 
-    .empty-state {
+    .role-tag {
+      flex-shrink: 0;
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .role-tag.user {
+      background: var(--vscode-badge-background, #4fc1ff);
+      color: var(--vscode-badge-foreground, #000);
+    }
+
+    .role-tag.assistant {
+      background: var(--vscode-statusBarItem-prominentBackground, #9b59b6);
+      color: #fff;
+    }
+
+    .content-preview {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
+    .no-messages {
       text-align: center;
-      padding: 24px 12px;
-      opacity: 0.6;
-    }
-
-    .empty-state p {
-      margin-bottom: 8px;
+      padding: 30px 10px;
+      opacity: 0.5;
       font-size: 12px;
     }
 
-    .divider {
-      border: none;
-      border-top: 1px solid var(--border);
-      margin: 12px 0;
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--vscode-input-border, #555);
+      color: var(--vscode-foreground);
+      padding: 4px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+      margin-top: 8px;
     }
 
-    .stats {
-      font-size: 11px;
-      opacity: 0.7;
-      margin-bottom: 8px;
-    }
+    .refresh-btn:hover { opacity: 0.8; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h2>aiDocExtra</h2>
-    <span class="badge" id="badge">0 / 0</span>
+  <!-- 操作栏 -->
+  <div class="action-bar">
+    <button class="action-btn btn-generate" onclick="generateDoc()">${texts.generateDoc}</button>
+    <button class="action-btn btn-publish" onclick="publish()">${texts.publish}</button>
+    <button class="action-btn btn-config" onclick="openConfig()">${texts.settings}</button>
   </div>
 
-  <!-- Action Buttons -->
-  <div class="actions">
-    <button class="btn primary" onclick="action('generateDoc')" title="Generate document from selected messages">
-      Generate Doc
-    </button>
-    <button class="btn" onclick="action('publish')" title="Publish a document">
-      Publish
-    </button>
-    <button class="btn secondary" onclick="action('openConfig')" title="Open configuration file">
-      Config
-    </button>
+  <!-- 全选栏 -->
+  <div class="select-all-bar">
+    <label>
+      <input type="checkbox" id="selectAll" ${allSelected ? "checked" : ""} onchange="toggleAll()" />
+      <span class="select-label">${allSelected ? texts.deselectAll : texts.selectAll}</span>
+    </label>
+    <span class="message-stats">${stats.selected}/${stats.total} ${texts.messageCount}</span>
   </div>
 
-  <hr class="divider">
-
-  <!-- Add Message Area -->
-  <div class="add-message-area">
-    <div class="section-title">Add Message</div>
-    <div class="role-selector">
-      <button class="role-btn active" id="roleUser" onclick="setRole('user')">User</button>
-      <button class="role-btn" id="roleAssistant" onclick="setRole('assistant')">Assistant</button>
-    </div>
-    <textarea id="messageInput" placeholder="Paste or type a message here..."></textarea>
-    <div class="input-group" style="margin-top: 6px;">
-      <button class="btn small" onclick="addMessage()">Add</button>
-      <button class="btn small secondary" onclick="pasteAndAdd()">Paste from Clipboard</button>
-    </div>
+  <!-- 消息列表 -->
+  <div class="message-list">
+    ${
+      messages.length > 0
+        ? messageListHtml
+        : `<div class="no-messages">
+             <p>${texts.noMessages}</p>
+             <button class="refresh-btn" onclick="refresh()">🔄 Refresh</button>
+           </div>`
+    }
   </div>
 
-  <hr class="divider">
-
-  <!-- Message List -->
-  <div class="section-title">
-    Messages
-    <span class="stats" id="stats"></span>
-  </div>
-  <div class="actions" style="margin-bottom: 6px;">
-    <button class="btn small secondary" onclick="action('selectAll')">Select All</button>
-    <button class="btn small secondary" onclick="action('deselectAll')">Deselect All</button>
-    <button class="btn small secondary" onclick="action('clearAll')">Clear</button>
-  </div>
-  <div class="message-list" id="messageList">
-    <div class="empty-state" id="emptyState">
-      <p>No messages yet.</p>
-      <p>Add messages from your AI conversations to generate documentation.</p>
-    </div>
-  </div>
-
-  <script nonce="${nonce}">
+  <script>
     const vscode = acquireVsCodeApi();
-    let currentRole = 'user';
-    let messages = [];
 
-    function setRole(role) {
-      currentRole = role;
-      document.getElementById('roleUser').classList.toggle('active', role === 'user');
-      document.getElementById('roleAssistant').classList.toggle('active', role === 'assistant');
+    function toggleMessage(id) {
+      vscode.postMessage({ type: 'toggleMessage', payload: { id } });
     }
 
-    function addMessage() {
-      const input = document.getElementById('messageInput');
-      const content = input.value.trim();
-      if (!content) return;
-
-      vscode.postMessage({
-        command: 'addMessage',
-        role: currentRole,
-        content: content,
-      });
-
-      input.value = '';
+    function toggleAll() {
+      const checked = document.getElementById('selectAll').checked;
+      vscode.postMessage({ type: 'toggleAll', payload: { include: checked } });
     }
 
-    function pasteAndAdd() {
-      vscode.postMessage({
-        command: 'pasteFromClipboard',
-        role: currentRole,
-      });
+    function generateDoc() {
+      vscode.postMessage({ type: 'generateDoc' });
     }
 
-    function action(cmd) {
-      vscode.postMessage({ command: cmd });
+    function publish() {
+      vscode.postMessage({ type: 'publish' });
     }
 
-    function toggleInclude(id) {
-      vscode.postMessage({ command: 'toggleInclude', id: id });
+    function openConfig() {
+      vscode.postMessage({ type: 'openConfig' });
     }
 
-    function removeMessage(id) {
-      vscode.postMessage({ command: 'removeMessage', id: id });
+    function refresh() {
+      vscode.postMessage({ type: 'ready' });
     }
 
-    function renderMessages(msgs, includedCount, totalCount) {
-      messages = msgs;
-      const list = document.getElementById('messageList');
-      const empty = document.getElementById('emptyState');
-      const badge = document.getElementById('badge');
-      const stats = document.getElementById('stats');
-
-      badge.textContent = includedCount + ' / ' + totalCount;
-      stats.textContent = '(' + includedCount + ' selected of ' + totalCount + ')';
-
-      if (msgs.length === 0) {
-        list.innerHTML = '';
-        list.appendChild(empty);
-        empty.style.display = 'block';
-        return;
-      }
-
-      empty.style.display = 'none';
-      list.innerHTML = msgs.map(function(msg) {
-        const date = new Date(msg.timestamp);
-        const timeStr = date.toLocaleTimeString();
-        const included = msg.include;
-
-        return '<div class="message-item ' + (included ? '' : 'excluded') + '">'
-          + '<input type="checkbox" ' + (included ? 'checked' : '') + ' onchange="toggleInclude(\\'' + msg.id + '\\')" title="Include in document">'
-          + '<div class="message-content">'
-          + '<div class="message-role">' + escapeHtml(msg.role) + '</div>'
-          + '<div class="message-text">' + escapeHtml(msg.content) + '</div>'
-          + '<div class="message-meta">' + timeStr + (msg.model ? ' · ' + escapeHtml(msg.model) : '') + '</div>'
-          + '</div>'
-          + '<div class="message-actions">'
-          + '<button class="delete-btn" onclick="removeMessage(\\'' + msg.id + '\\')" title="Remove">×</button>'
-          + '</div>'
-          + '</div>';
-      }).join('');
-    }
-
-    function escapeHtml(text) {
-      if (!text) return '';
-      return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    // Handle messages from the extension
-    window.addEventListener('message', function(event) {
-      const message = event.data;
-      if (message.command === 'updateMessages') {
-        renderMessages(message.messages, message.includedCount, message.totalCount);
+    // 监听来自扩展的增量更新消息
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg.type === 'messagesUpdated') {
+        const { messages, stats, allSelected, texts } = msg.payload;
+        // 更新全选框
+        const selectAllEl = document.getElementById('selectAll');
+        if (selectAllEl) {
+          selectAllEl.checked = allSelected;
+          selectAllEl.parentElement.querySelector('.select-label').textContent =
+            allSelected ? texts.deselectAll : texts.selectAll;
+        }
+        // 更新统计
+        const statsEl = document.querySelector('.message-stats');
+        if (statsEl) {
+          statsEl.textContent = stats.selected + '/' + stats.total + ' ' + texts.messageCount;
+        }
+        // 更新消息列表
+        const listEl = document.querySelector('.message-list');
+        if (listEl && messages.length > 0) {
+          let html = '';
+          messages.forEach(function(m) {
+            const roleLabel = m.role === 'user' ? texts.user : texts.assistant;
+            const preview = m.content.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+            const short = preview.length > 80 ? preview.substring(0, 80) + '...' : preview;
+            const escaped = short.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            html += '<div class="message-item" data-id="' + m.id + '">' +
+              '<label class="checkbox-wrapper">' +
+              '<input type="checkbox" ' + (m.include ? 'checked' : '') +
+              ' onchange="toggleMessage(\'' + m.id + '\')" />' +
+              '<span class="role-tag ' + m.role + '">' + roleLabel + '</span>' +
+              '<span class="content-preview">' + escaped + '</span>' +
+              '</label></div>';
+          });
+          listEl.innerHTML = html;
+        } else if (listEl && messages.length === 0) {
+          listEl.innerHTML = '<div class="no-messages"><p>' + texts.noMessages + '</p>' +
+            '<button class="refresh-btn" onclick="refresh()">🔄 Refresh</button></div>';
+        }
       }
     });
 
-    // Handle Enter key in textarea (Ctrl+Enter to add)
-    document.getElementById('messageInput').addEventListener('keydown', function(e) {
-      if (e.ctrlKey && e.key === 'Enter') {
-        addMessage();
-      }
-    });
+    // 通知扩展 webview 已准备好
+    vscode.postMessage({ type: 'ready' });
   </script>
 </body>
 </html>`;
   }
 
-  /** Generate a random nonce for CSP */
-  private getNonce(): string {
-    let text = "";
-    const possible =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+  /**
+   * HTML 转义
+   */
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
+  /**
+   * 截断文本
+   */
+  private truncate(text: string, maxLength: number): string {
+    // 先把换行去掉变成单行
+    const singleLine = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+    if (singleLine.length <= maxLength) {
+      return singleLine;
+    }
+    return singleLine.substring(0, maxLength) + "...";
+  }
+
+  /**
+   * 释放资源
+   */
   dispose(): void {
-    this._onAction.dispose();
+    this.storeListener?.dispose();
   }
 }

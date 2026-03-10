@@ -1,222 +1,242 @@
 /**
- * Publisher Base / Orchestrator
- * Manages publishing documents to various platforms.
+ * 发布编排
+ * Publishing orchestration - coordinates publishing to various platforms
  */
 
 import * as vscode from "vscode";
 import * as fs from "fs";
+import * as path from "path";
 import { ConfigLoader } from "../config/configLoader";
-import { PublishResult } from "../types";
 import { ZhihuPublisher } from "./zhihuPublisher";
 import { MediumPublisher } from "./mediumPublisher";
-
-interface PlatformPublisher {
-  name: string;
-  publish(title: string, content: string): Promise<PublishResult>;
-  isConfigured(): boolean;
-}
+import { PublishResult } from "../types";
+import { getTexts } from "../i18n";
 
 export class Publisher {
-  private platforms: Map<string, PlatformPublisher> = new Map();
   private outputChannel: vscode.OutputChannel;
+  private configLoader: ConfigLoader;
+  private zhihuPublisher: ZhihuPublisher;
+  private mediumPublisher: MediumPublisher;
 
   constructor(
-    private configLoader: ConfigLoader,
-    outputChannel: vscode.OutputChannel
+    outputChannel: vscode.OutputChannel,
+    configLoader: ConfigLoader
   ) {
     this.outputChannel = outputChannel;
-    this.initializePlatforms();
-  }
+    this.configLoader = configLoader;
 
-  /** Initialize available publishing platforms */
-  private initializePlatforms(): void {
-    const config = this.configLoader.getConfig();
-
-    this.platforms.set(
-      "zhihu",
-      new ZhihuPublisher(config.publish.zhihu?.cookie || "")
+    const config = configLoader.getConfig();
+    this.zhihuPublisher = new ZhihuPublisher(
+      outputChannel,
+      config.publish.zhihu || { cookie: "" }
     );
-    this.platforms.set(
-      "medium",
-      new MediumPublisher(config.publish.medium?.api_token || "")
+    this.mediumPublisher = new MediumPublisher(
+      outputChannel,
+      config.publish.medium || { api_token: "" }
     );
-
-    // Re-initialize on config change
-    this.configLoader.onConfigChanged((newConfig) => {
-      this.platforms.set(
-        "zhihu",
-        new ZhihuPublisher(newConfig.publish.zhihu?.cookie || "")
-      );
-      this.platforms.set(
-        "medium",
-        new MediumPublisher(newConfig.publish.medium?.api_token || "")
-      );
-    });
   }
 
   /**
-   * Publish a markdown file to a platform.
+   * 发布文章
+   * Publish an article to the selected platform
    */
-  async publishFile(filepath: string): Promise<void> {
-    // Read file
-    if (!fs.existsSync(filepath)) {
-      vscode.window.showErrorMessage(
-        `aiDocExtra: File not found: ${filepath}`
-      );
-      return;
-    }
-
-    const content = fs.readFileSync(filepath, "utf-8");
-    const title = this.extractTitle(content);
-
-    // Let user choose platform
+  async publish(filePath?: string): Promise<PublishResult> {
     const config = this.configLoader.getConfig();
-    const availablePlatforms = Array.from(this.platforms.entries())
-      .map(([key, p]) => ({
-        label: p.name,
-        description: p.isConfigured() ? "Configured" : "Not configured",
-        key,
-      }));
+    const texts = getTexts(config.language || "zh");
 
-    const selected = await vscode.window.showQuickPick(availablePlatforms, {
-      placeHolder: "Select publishing platform",
-      title: "aiDocExtra: Publish Article",
-    });
+    // 更新发布器配置
+    this.zhihuPublisher.updateConfig(config.publish.zhihu || { cookie: "" });
+    this.mediumPublisher.updateConfig(
+      config.publish.medium || { api_token: "" }
+    );
 
-    if (!selected) {
-      return;
+    // 1. 选择要发布的文件
+    const targetFile = filePath || (await this.selectDocument());
+    if (!targetFile) {
+      return {
+        success: false,
+        platform: "",
+        message: "未选择文件",
+      };
     }
 
-    const platform = this.platforms.get(selected.key);
+    // 2. 读取文件内容
+    const content = fs.readFileSync(targetFile, "utf-8");
+    const title = this.extractTitle(content) || path.basename(targetFile, ".md");
+
+    // 3. 选择发布平台
+    const platform = await this.selectPlatform(config.publish.target);
     if (!platform) {
-      return;
+      return {
+        success: false,
+        platform: "",
+        message: "未选择平台",
+      };
     }
 
-    if (!platform.isConfigured()) {
-      const configure = await vscode.window.showWarningMessage(
-        `${platform.name} is not configured. Would you like to configure it?`,
-        "Open Config",
-        "Cancel"
-      );
-      if (configure === "Open Config") {
-        await this.configLoader.openConfigFile();
-      }
-      return;
+    // 4. 确认发布
+    const confirmLabel = config.language === "en" ? "Confirm" : "确认";
+    const confirmMsg = config.language === "en"
+      ? `Publish "${title}" to ${platform}?`
+      : `确认发布 "${title}" 到 ${platform}？`;
+    const cancelledMsg = config.language === "en" ? "Publishing cancelled" : "用户取消发布";
+
+    const confirm = await vscode.window.showInformationMessage(
+      confirmMsg,
+      { modal: true },
+      confirmLabel
+    );
+
+    if (confirm !== confirmLabel) {
+      return {
+        success: false,
+        platform,
+        message: cancelledMsg,
+      };
     }
 
-    // Publish with progress
-    await vscode.window.withProgress(
+    // 5. 执行发布
+    return await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `aiDocExtra: Publishing to ${platform.name}...`,
+        title: texts.publishing,
         cancellable: false,
       },
-      async (progress) => {
-        try {
-          progress.report({ message: "Uploading..." });
-          // Strip frontmatter before publishing
-          const cleanContent = this.stripFrontmatter(content);
-          const result = await platform.publish(
-            title || "Untitled",
-            cleanContent
-          );
+      async () => {
+        let result: PublishResult;
 
-          if (result.success) {
-            const action = result.url
-              ? await vscode.window.showInformationMessage(
-                  `aiDocExtra: Published to ${platform.name}!`,
-                  "Open in Browser"
-                )
-              : await vscode.window.showInformationMessage(
-                  `aiDocExtra: Published to ${platform.name}!`
-                );
+        switch (platform) {
+          case "zhihu":
+            result = await this.zhihuPublisher.publish(title, content);
+            break;
+          case "medium":
+            result = await this.mediumPublisher.publish(title, content);
+            break;
+          default:
+            result = {
+              success: false,
+              platform,
+              message: `不支持的平台: ${platform}`,
+            };
+        }
 
-            if (action === "Open in Browser" && result.url) {
+        if (result.success) {
+          vscode.window.showInformationMessage(result.message);
+          if (result.url) {
+            const open = await vscode.window.showInformationMessage(
+              `${texts.publishSuccess}${result.url}`,
+              "打开链接"
+            );
+            if (open === "打开链接") {
               vscode.env.openExternal(vscode.Uri.parse(result.url));
             }
-          } else {
-            vscode.window.showErrorMessage(
-              `aiDocExtra: Publishing failed: ${result.message}`
-            );
           }
-        } catch (err) {
-          this.outputChannel.appendLine(
-            `[Publisher] Error publishing to ${platform.name}: ${err}`
-          );
-          vscode.window.showErrorMessage(
-            `aiDocExtra: Publishing failed: ${err}`
-          );
+        } else {
+          vscode.window.showErrorMessage(result.message);
         }
+
+        return result;
       }
     );
   }
 
   /**
-   * Interactive publish flow: select a document then a platform
+   * 选择要发布的文档
+   * Select a document to publish
    */
-  async publishInteractive(): Promise<void> {
+  private async selectDocument(): Promise<string | undefined> {
     const outputDir = this.configLoader.getOutputDir();
-    const files = this.listMarkdownFiles(outputDir);
 
-    if (files.length === 0) {
-      vscode.window.showInformationMessage(
-        "aiDocExtra: No documents found. Generate a document first."
+    if (!outputDir || !fs.existsSync(outputDir)) {
+      vscode.window.showWarningMessage(
+        "文档目录不存在。请先生成文档。"
       );
-      return;
+      return undefined;
     }
 
-    // Let user pick a document
+    // 列出所有 markdown 文件
+    const files = fs
+      .readdirSync(outputDir)
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .reverse();
+
+    if (files.length === 0) {
+      vscode.window.showWarningMessage(
+        "没有可发布的文档。请先生成文档。"
+      );
+      return undefined;
+    }
+
+    // 显示活跃编辑器中的文件优先
+    const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (activeFile && activeFile.endsWith(".md") && activeFile.startsWith(outputDir)) {
+      const useActive = await vscode.window.showQuickPick(
+        ["当前文件: " + path.basename(activeFile), "选择其他文件..."],
+        { placeHolder: "选择要发布的文档" }
+      );
+
+      if (useActive?.startsWith("当前文件")) {
+        return activeFile;
+      }
+      if (!useActive) {
+        return undefined;
+      }
+    }
+
     const items = files.map((f) => ({
-      label: f.name,
-      description: f.date,
-      filepath: f.path,
+      label: f,
+      description: path.join(outputDir, f),
     }));
 
     const selected = await vscode.window.showQuickPick(items, {
-      placeHolder: "Select a document to publish",
-      title: "aiDocExtra: Select Document",
+      placeHolder: "选择要发布的文档",
     });
 
-    if (!selected) {
-      return;
-    }
-
-    await this.publishFile(selected.filepath);
+    return selected ? path.join(outputDir, selected.label) : undefined;
   }
 
-  /** List markdown files in the output directory */
-  private listMarkdownFiles(
-    dir: string
-  ): { name: string; date: string; path: string }[] {
-    if (!fs.existsSync(dir)) {
-      return [];
-    }
-    return fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .reverse()
-      .map((f) => {
-        const dateMatch = f.match(/^(\d{4}-\d{2}-\d{2})/);
-        return {
-          name: f,
-          date: dateMatch?.[1] || "",
-          path: `${dir}/${f}`,
-        };
-      });
+  /**
+   * 选择发布平台
+   * Select a publishing platform
+   */
+  private async selectPlatform(
+    defaultTarget: string
+  ): Promise<string | undefined> {
+    const platforms = [
+      { label: "知乎 (Zhihu)", description: "中文知识分享平台", value: "zhihu" },
+      {
+        label: "Medium",
+        description: "International blogging platform",
+        value: "medium",
+      },
+    ];
+
+    // 将默认平台排在前面
+    platforms.sort((a, b) => {
+      if (a.value === defaultTarget) { return -1; }
+      if (b.value === defaultTarget) { return 1; }
+      return 0;
+    });
+
+    const selected = await vscode.window.showQuickPick(
+      platforms.map((p) => ({
+        label: p.label,
+        description: p.description,
+        platform: p.value,
+      })),
+      { placeHolder: "选择发布平台" }
+    );
+
+    return (selected as any)?.platform;
   }
 
-  /** Extract title from markdown content */
+  /**
+   * 从 Markdown 内容提取标题
+   * Extract title from Markdown content
+   */
   private extractTitle(content: string): string | undefined {
-    // Skip frontmatter
-    const stripped = this.stripFrontmatter(content);
-    const match = stripped.match(/^#\s+(.+)$/m);
+    const match = content.match(/^#\s+(.+)$/m);
     return match?.[1]?.trim();
-  }
-
-  /** Strip YAML frontmatter from content */
-  private stripFrontmatter(content: string): string {
-    const fmRegex = /^---\n[\s\S]*?\n---\n*/;
-    return content.replace(fmRegex, "");
   }
 }

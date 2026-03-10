@@ -1,71 +1,118 @@
 /**
- * Prompt Builder
- * Constructs prompts for AI-based document generation.
+ * 提示词模板生成
+ * Prompt template builder for document generation
  */
 
-import { DocMessage, AiDocConfig } from "../types";
+import { DocMessage, ContinueDocConfig } from "../types";
 
 export class PromptBuilder {
-  constructor(private config: AiDocConfig) {}
+  private config: ContinueDocConfig;
 
-  /** Update config reference */
-  updateConfig(config: AiDocConfig): void {
+  constructor(config: ContinueDocConfig) {
     this.config = config;
   }
 
   /**
-   * Build the full prompt for document generation.
-   * Combines the template, rules, and selected messages.
+   * 更新配置
+   * Update configuration
    */
-  buildDocumentPrompt(messages: DocMessage[]): string {
-    const sections: string[] = [];
-
-    // 1. System instruction / prompt template
-    const template =
-      this.config.doc.prompt_template ||
-      "Generate a professional technical document from the following AI conversation.\nFocus on practical insights and actionable information.";
-    sections.push(template);
-
-    // 2. Rules
-    if (this.config.doc.rules) {
-      sections.push(`\n## Document Generation Rules\n${this.config.doc.rules}`);
-    }
-
-    // 3. Conversation content
-    sections.push("\n## Conversation\n");
-    for (const msg of messages) {
-      const roleLabel = msg.role === "user" ? "User" : "AI Assistant";
-      const modelInfo = msg.model ? ` (${msg.model})` : "";
-      sections.push(`### ${roleLabel}${modelInfo}\n${msg.content}\n`);
-    }
-
-    // 4. Output instructions
-    sections.push(
-      "\n## Output Requirements\n" +
-        "- Output a well-structured Markdown document\n" +
-        "- Include a title (# heading)\n" +
-        "- Organize content with clear sections\n" +
-        "- Preserve important code blocks with proper syntax highlighting\n" +
-        "- Add a brief summary at the beginning\n" +
-        "- Use professional, clear language\n"
-    );
-
-    return sections.join("\n");
+  updateConfig(config: ContinueDocConfig): void {
+    this.config = config;
   }
 
   /**
-   * Build a prompt to generate a title for the document.
+   * 构建文档生成提示词
+   * Build the prompt for document generation
    */
-  buildTitlePrompt(messages: DocMessage[]): string {
-    const preview = messages
-      .slice(0, 3)
-      .map((m) => m.content.substring(0, 200))
-      .join("\n");
+  buildDocPrompt(messages: DocMessage[]): string {
+    const rules = this.config.doc.rules || "";
+    const customTemplate = this.config.doc.prompt_template || "";
+    const language = this.config.language || "zh";
 
-    return (
-      `Based on the following conversation snippets, generate a concise, ` +
-      `descriptive title (in the same language as the conversation). ` +
-      `Output ONLY the title, nothing else.\n\n${preview}`
-    );
+    // 格式化对话内容
+    const conversationText = this.formatConversation(messages);
+
+    // 构建完整的提示词
+    const systemPrompt = this.buildSystemPrompt(language, rules, customTemplate);
+
+    return `${systemPrompt}\n\n---\n\n## 对话内容 / Conversation Content\n\n${conversationText}\n\n---\n\n请根据以上对话内容生成文档。\nPlease generate a document based on the above conversation.`;
+  }
+
+  /**
+   * 构建系统提示词
+   * Build the system prompt
+   */
+  private buildSystemPrompt(
+    language: string,
+    rules: string,
+    customTemplate: string
+  ): string {
+    if (customTemplate) {
+      return `${customTemplate}\n\n### 生成规则 / Generation Rules:\n${rules}`;
+    }
+
+    if (language === "en") {
+      return [
+        "# Document Generation Task",
+        "",
+        "You are a professional technical writer. Generate a well-structured Markdown document from the following AI conversation.",
+        "",
+        "## Requirements:",
+        "- Create a clear, descriptive title",
+        "- Organize content logically with headings and sections",
+        "- Preserve important code snippets with proper formatting",
+        "- Remove unnecessary conversational elements",
+        "- Add a brief summary/introduction",
+        "- Use proper Markdown formatting throughout",
+        "",
+        "## Additional Rules:",
+        rules,
+        "",
+        "## Output Format:",
+        "- Output a complete Markdown document",
+        "- Start with a title (# heading)",
+        "- Include a brief introduction",
+        "- Organize the main content with appropriate headings",
+        "- End with a summary or conclusion if applicable",
+      ].join("\n");
+    }
+
+    // Chinese (default)
+    return [
+      "# 文档生成任务",
+      "",
+      "你是一名专业的技术文档写作者。请根据以下 AI 对话内容，生成一篇结构清晰的 Markdown 文档。",
+      "",
+      "## 要求：",
+      "- 创建一个清晰、有描述性的标题",
+      "- 使用标题和章节来合理组织内容",
+      "- 保留重要的代码片段并使用正确的格式",
+      "- 删除不必要的对话元素",
+      "- 添加简要的摘要/引言",
+      "- 全文使用规范的 Markdown 格式",
+      "",
+      "## 额外规则：",
+      rules,
+      "",
+      "## 输出格式：",
+      "- 输出完整的 Markdown 文档",
+      "- 以标题（# 标题）开头",
+      "- 包含简要引言",
+      "- 使用合适的标题组织主要内容",
+      "- 如果适用，以总结或结论结尾",
+    ].join("\n");
+  }
+
+  /**
+   * 格式化对话内容
+   * Format conversation messages
+   */
+  private formatConversation(messages: DocMessage[]): string {
+    return messages
+      .map((msg) => {
+        const role = msg.role === "user" ? "👤 User" : "🤖 AI";
+        return `### ${role}\n\n${msg.content}`;
+      })
+      .join("\n\n---\n\n");
   }
 }

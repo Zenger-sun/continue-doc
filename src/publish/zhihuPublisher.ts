@@ -1,79 +1,111 @@
 /**
- * Zhihu Publisher
- * Publishes articles to Zhihu (知乎) using their web API.
+ * 知乎平台发布集成
+ * Zhihu platform publishing integration
  */
 
 import * as https from "https";
-import * as http from "http";
-import { PublishResult } from "../types";
+import { PublishResult, ZhihuConfig } from "../types";
+
+import type { OutputChannel } from "vscode";
 
 export class ZhihuPublisher {
-  name = "Zhihu (知乎)";
+  private outputChannel: OutputChannel;
+  private config: ZhihuConfig;
 
-  constructor(private cookie: string) {}
-
-  /** Check if the publisher has valid configuration */
-  isConfigured(): boolean {
-    return this.cookie.length > 0;
+  constructor(outputChannel: OutputChannel, config: ZhihuConfig) {
+    this.outputChannel = outputChannel;
+    this.config = config;
   }
 
   /**
-   * Publish an article to Zhihu.
-   * Uses Zhihu's draft API to create a draft, then publish it.
+   * 更新配置
+   * Update configuration
    */
-  async publish(title: string, content: string): Promise<PublishResult> {
-    if (!this.isConfigured()) {
+  updateConfig(config: ZhihuConfig): void {
+    this.config = config;
+  }
+
+  /**
+   * 发布文章到知乎
+   * Publish an article to Zhihu
+   */
+  async publish(
+    title: string,
+    content: string
+  ): Promise<PublishResult> {
+    if (!this.config.cookie) {
       return {
         success: false,
-        message: "Zhihu cookie not configured. Please add your Zhihu session cookie in .aiDocExtra/config.yaml",
+        platform: "zhihu",
+        message:
+          "知乎 Cookie 未配置。请在 .continue-doc/config.yaml 中设置 publish.zhihu.cookie。",
       };
     }
 
-    try {
-      // Step 1: Create a draft
-      const draftId = await this.createDraft(title, content);
+    this.outputChannel.appendLine(
+      `[ZhihuPublisher] Publishing article: ${title}`
+    );
 
+    try {
+      // 步骤 1：创建草稿
+      const draftId = await this.createDraft(title, content);
       if (!draftId) {
         return {
           success: false,
-          message: "Failed to create Zhihu draft",
+          platform: "zhihu",
+          message: "创建知乎草稿失败。请检查 Cookie 是否有效。",
         };
       }
 
-      // Step 2: Publish the draft
-      const publishResult = await this.publishDraft(draftId);
+      this.outputChannel.appendLine(
+        `[ZhihuPublisher] Draft created: ${draftId}`
+      );
 
-      if (publishResult) {
+      // 步骤 2：发布草稿
+      const publishUrl = await this.publishDraft(draftId);
+
+      if (publishUrl) {
         return {
           success: true,
-          url: `https://zhuanlan.zhihu.com/p/${publishResult}`,
-          message: "Article published to Zhihu successfully!",
+          platform: "zhihu",
+          url: publishUrl,
+          message: `文章已发布到知乎: ${publishUrl}`,
         };
       }
 
+      // 如果自动发布失败，至少草稿已创建
+      const draftUrl = `https://zhuanlan.zhihu.com/p/${draftId}/edit`;
       return {
-        success: false,
-        message: "Failed to publish Zhihu draft",
+        success: true,
+        platform: "zhihu",
+        url: draftUrl,
+        message: `草稿已创建，请手动发布: ${draftUrl}`,
       };
-    } catch (err) {
+    } catch (error: any) {
+      this.outputChannel.appendLine(
+        `[ZhihuPublisher] Error: ${error.message}`
+      );
       return {
         success: false,
-        message: `Zhihu publish error: ${err}`,
+        platform: "zhihu",
+        message: `知乎发布失败: ${error.message}`,
       };
     }
   }
 
-  /** Create a draft on Zhihu */
+  /**
+   * 创建知乎草稿
+   * Create a Zhihu draft article
+   */
   private async createDraft(
     title: string,
     content: string
-  ): Promise<string | undefined> {
+  ): Promise<string | null> {
     const htmlContent = this.markdownToSimpleHtml(content);
 
-    const body = JSON.stringify({
-      title,
+    const postData = JSON.stringify({
+      title: title,
       content: htmlContent,
-      delta_time: 0,
     });
 
     return new Promise((resolve, reject) => {
@@ -83,156 +115,145 @@ export class ZhihuPublisher {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Cookie": this.cookie,
+          "Content-Length": Buffer.byteLength(postData),
+          Cookie: this.config.cookie,
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "x-requested-with": "fetch",
+          Referer: "https://zhuanlan.zhihu.com/write",
         },
       };
 
       const req = https.request(options, (res) => {
         let data = "";
-        res.on("data", (chunk: Buffer) => (data += chunk));
+        res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try {
-            const json = JSON.parse(data);
-            resolve(json.id?.toString());
+            const response = JSON.parse(data);
+            if (response.id) {
+              resolve(String(response.id));
+            } else {
+              this.outputChannel.appendLine(
+                `[ZhihuPublisher] Draft creation response: ${data}`
+              );
+              resolve(null);
+            }
           } catch {
-            reject(new Error(`Invalid response: ${data.substring(0, 200)}`));
+            this.outputChannel.appendLine(
+              `[ZhihuPublisher] Invalid response: ${data}`
+            );
+            resolve(null);
           }
         });
       });
 
-      req.on("error", reject);
-      req.write(body);
+      req.on("error", (err) => reject(err));
+      req.write(postData);
       req.end();
     });
   }
 
-  /** Publish a draft on Zhihu */
-  private async publishDraft(
-    draftId: string
-  ): Promise<string | undefined> {
-    const body = JSON.stringify({
+  /**
+   * 发布已创建的草稿
+   * Publish a created draft
+   */
+  private async publishDraft(draftId: string): Promise<string | null> {
+    const postData = JSON.stringify({
       column: null,
       topic_url: "",
     });
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const options: https.RequestOptions = {
         hostname: "zhuanlan.zhihu.com",
         path: `/api/articles/${draftId}/publish`,
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "Cookie": this.cookie,
+          "Content-Length": Buffer.byteLength(postData),
+          Cookie: this.config.cookie,
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "x-requested-with": "fetch",
+          Referer: `https://zhuanlan.zhihu.com/p/${draftId}/edit`,
         },
       };
 
       const req = https.request(options, (res) => {
         let data = "";
-        res.on("data", (chunk: Buffer) => (data += chunk));
+        res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try {
-            const json = JSON.parse(data);
-            resolve(json.id?.toString() || draftId);
-          } catch {
-            // If publish is successful, it might return 200 with the article ID
-            if (res.statusCode === 200) {
-              resolve(draftId);
+            const response = JSON.parse(data);
+            if (response.url) {
+              resolve(response.url);
             } else {
-              reject(
-                new Error(
-                  `Publish failed with status ${res.statusCode}: ${data.substring(0, 200)}`
-                )
+              this.outputChannel.appendLine(
+                `[ZhihuPublisher] Publish response: ${data}`
               );
+              resolve(null);
             }
+          } catch {
+            resolve(null);
           }
         });
       });
 
-      req.on("error", reject);
-      req.write(body);
+      req.on("error", () => resolve(null));
+      req.write(postData);
       req.end();
     });
   }
 
   /**
-   * Basic Markdown to HTML conversion for Zhihu.
-   * Zhihu expects HTML content for articles.
+   * 简单的 Markdown 转 HTML
+   * Simple Markdown to HTML conversion for Zhihu
    */
   private markdownToSimpleHtml(markdown: string): string {
     let html = markdown;
 
-    // Code blocks
+    // 代码块
     html = html.replace(
       /```(\w*)\n([\s\S]*?)```/g,
-      (_, lang, code) =>
-        `<pre><code class="language-${lang}">${this.escapeHtml(code.trim())}</code></pre>`
+      '<pre><code class="language-$1">$2</code></pre>'
     );
 
-    // Inline code
-    html = html.replace(
-      /`([^`]+)`/g,
-      "<code>$1</code>"
-    );
+    // 行内代码
+    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-    // Headers
+    // 标题
     html = html.replace(/^#### (.+)$/gm, "<h4>$1</h4>");
     html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
     html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
     html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
 
-    // Bold
+    // 粗体和斜体
     html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-
-    // Italic
     html = html.replace(/\*(.+?)\*/g, "<i>$1</i>");
 
-    // Unordered lists
-    html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
+    // 链接
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
 
-    // Ordered lists
-    html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
-
-    // Links
-    html = html.replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2">$1</a>'
-    );
-
-    // Paragraphs: wrap non-tag lines
-    html = html
-      .split("\n\n")
-      .map((block) => {
-        block = block.trim();
-        if (!block) {
-          return "";
-        }
-        if (block.startsWith("<")) {
-          return block;
-        }
-        return `<p>${block.replace(/\n/g, "<br>")}</p>`;
-      })
-      .join("\n");
-
-    // Horizontal rules
+    // 分割线
     html = html.replace(/^---$/gm, "<hr>");
 
-    return html;
-  }
+    // 引用
+    html = html.replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>");
 
-  /** Escape HTML special characters */
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+    // 无序列表
+    html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
+
+    // 有序列表
+    html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+
+    // 将连续的 <li> 块包裹在 <ul> 中
+    html = html.replace(
+      /(?:<li>.*?<\/li>\s*)+/g,
+      (match) => `<ul>${match.trim()}</ul>`
+    );
+
+    // 段落
+    html = html.replace(/\n\n/g, "</p><p>");
+    html = `<p>${html}</p>`;
+
+    return html;
   }
 }

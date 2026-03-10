@@ -1,4 +1,4 @@
-# aiDocExtra 默认配置
+# Continue-Doc 默认配置
 
 doc:
   # 文档生成规则
@@ -9,7 +9,7 @@ doc:
     使用规范的 Markdown 格式
 
   # 生成文档的输出目录
-  output_dir: ".ai-dev-docs"
+  output_dir: ".continue-doc"
 
   # 可选：自定义文档生成的提示词模板
   prompt_template: |
@@ -32,3 +32,6 @@ publish:
   # Dev.to 配置（待实现）
   devto:
     api_token: ""
+
+# 语言配置
+language: zh  # 选项: zh (中文) 或 en (English)

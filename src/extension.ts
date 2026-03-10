@@ -1,209 +1,238 @@
 /**
- * aiDocExtra - Extension Entry Point
+ * Continue-Doc 扩展主入口
+ * Extension main entry point
  *
- * AI-powered documentation generation and publishing for Continue chats.
- * This extension enhances the Continue plugin with document generation
- * and multi-platform publishing capabilities.
+ * 激活流程：
+ * 1. 检测 Continue 安装
+ * 2. 加载配置
+ * 3. 初始化消息存储
+ * 4. 钩接 Continue 聊天
+ * 5. 注入 UI 组件
+ * 6. 注册命令
  */
 
 import * as vscode from "vscode";
 import { ContinueDetector } from "./continue/continueDetector";
 import { ContinueAPI } from "./continue/continueAPI";
-import { ConfigLoader } from "./config/configLoader";
-import { MessageStore } from "./chat/messageStore";
 import { ChatHook } from "./chat/chatHook";
+import { MessageStore } from "./chat/messageStore";
 import { DocGenerator } from "./doc/docGenerator";
 import { Publisher } from "./publish/publisher";
-import { AiDocPanel } from "./ui/injectUI";
+import { ConfigLoader } from "./config/configLoader";
+import { InjectUI } from "./ui/injectUI";
+import { getTexts } from "./i18n";
 
 let outputChannel: vscode.OutputChannel;
 
 export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  // Create output channel for logging
-  outputChannel = vscode.window.createOutputChannel("aiDocExtra");
-  outputChannel.appendLine("[aiDocExtra] Activating extension...");
+  // 创建输出通道
+  outputChannel = vscode.window.createOutputChannel("Continue-Doc");
+  outputChannel.appendLine("Continue-Doc is activating...");
 
-  // ── Step 1: Detect Continue ──────────────────────────────────────────
-  if (!ContinueDetector.isInstalled()) {
-    outputChannel.appendLine(
-      "[aiDocExtra] Continue extension not found. Prompting installation."
-    );
-    await ContinueDetector.promptInstall();
-    // Continue without blocking - user can still use doc generation manually
+  // ───────────────────────────────────────
+  // 1. 加载配置
+  // ───────────────────────────────────────
+  const configLoader = new ConfigLoader(outputChannel);
+  const config = await configLoader.loadConfig();
+  const language = configLoader.getLanguage();
+  const texts = getTexts(language);
+
+  outputChannel.appendLine(`[Extension] Language: ${language}`);
+
+  // ───────────────────────────────────────
+  // 2. 检测 Continue 安装
+  // ───────────────────────────────────────
+  const detector = new ContinueDetector(outputChannel);
+  const continueFound = detector.detect();
+
+  if (!continueFound) {
+    outputChannel.appendLine("[Extension] Continue not found.");
+    vscode.window.showWarningMessage(texts.continueNotFound);
+    // 即使 Continue 不在也继续激活，只是功能受限
   } else {
-    outputChannel.appendLine("[aiDocExtra] Continue extension detected.");
-    // Wait for Continue to activate (non-blocking)
-    ContinueDetector.waitForActivation().then((active) => {
-      if (active) {
-        outputChannel.appendLine(
-          "[aiDocExtra] Continue extension is active."
-        );
-      } else {
-        outputChannel.appendLine(
-          "[aiDocExtra] Continue extension did not activate within timeout."
-        );
-      }
-    });
+    // 等待 Continue 激活
+    await detector.waitForActivation(5000);
   }
 
-  // ── Step 2: Initialize Config ────────────────────────────────────────
-  const configLoader = new ConfigLoader();
-  await configLoader.initialize();
-  outputChannel.appendLine("[aiDocExtra] Configuration loaded.");
-
-  // ── Step 3: Initialize Message Store ─────────────────────────────────
+  // ───────────────────────────────────────
+  // 3. 初始化核心模块
+  // ───────────────────────────────────────
+  const continueAPI = new ContinueAPI(outputChannel);
   const messageStore = new MessageStore();
+  const chatHook = new ChatHook(outputChannel, continueAPI, messageStore);
+  const docGenerator = new DocGenerator(outputChannel, messageStore, configLoader);
+  const publisher = new Publisher(outputChannel, configLoader);
 
-  // ── Step 4: Initialize Chat Hook ─────────────────────────────────────
-  const chatHook = new ChatHook(messageStore);
-  chatHook.activate(context);
-  outputChannel.appendLine("[aiDocExtra] Chat hook activated.");
+  // ───────────────────────────────────────
+  // 4. 初始化聊天钩接
+  // ───────────────────────────────────────
+  if (continueFound) {
+    await chatHook.initialize();
+  }
 
-  // ── Step 5: Initialize Doc Generator ─────────────────────────────────
-  const docGenerator = new DocGenerator(
-    messageStore,
-    configLoader,
-    outputChannel
+  // ───────────────────────────────────────
+  // 5. 注册 Webview 面板
+  // ───────────────────────────────────────
+  const uiProvider = new InjectUI(outputChannel, messageStore, language, {
+    onGenerateDoc: async () => {
+      await docGenerator.generate();
+    },
+    onPublish: async () => {
+      await publisher.publish();
+    },
+    onOpenConfig: async () => {
+      await openConfigFile(configLoader, texts);
+    },
+    onRefresh: async () => {
+      await chatHook.refreshMessages();
+    },
+  });
+
+  const panelRegistration = vscode.window.registerWebviewViewProvider(
+    InjectUI.viewType,
+    uiProvider
   );
+  context.subscriptions.push(panelRegistration);
 
-  // ── Step 6: Initialize Publisher ─────────────────────────────────────
-  const publisher = new Publisher(configLoader, outputChannel);
+  // ───────────────────────────────────────
+  // 6. 注册命令
+  // ───────────────────────────────────────
 
-  // ── Step 7: Initialize UI Panel ──────────────────────────────────────
-  // 创建面板动作处理函数
-  const handlePanelAction = (action: string) => {
-    switch (action) {
-      case "generateDoc":
-        vscode.commands.executeCommand("aiDocExtra.generateDocument");
-        break;
-      case "publish":
-        vscode.commands.executeCommand("aiDocExtra.publishArticle");
-        break;
-      case "openConfig":
-        vscode.commands.executeCommand("aiDocExtra.openConfig");
-        break;
+  // 生成文档命令
+  const generateCmd = vscode.commands.registerCommand(
+    "continue-doc.generateDocument",
+    async () => {
+      outputChannel.appendLine("[Command] generateDocument triggered.");
+      await docGenerator.generate();
     }
-  };
-
-  // 独立侧边栏面板
-  const panelProvider = new AiDocPanel(context.extensionUri, messageStore);
-  panelProvider.onAction(handlePanelAction);
-
-  // Continue 侧边栏内嵌面板（共享同一个 messageStore）
-  const continuePanelProvider = new AiDocPanel(context.extensionUri, messageStore);
-  continuePanelProvider.onAction(handlePanelAction);
-
-  // 注册两个 webview view provider
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      AiDocPanel.viewType,       // "aiDocExtra.panel" — 独立侧边栏
-      panelProvider
-    ),
-    vscode.window.registerWebviewViewProvider(
-      "aiDocExtra.continuePanel", // Continue 侧边栏内嵌
-      continuePanelProvider
-    )
   );
 
-  // ── Step 8: Register Commands ────────────────────────────────────────
+  // 发布文章命令
+  const publishCmd = vscode.commands.registerCommand(
+    "continue-doc.publishArticle",
+    async () => {
+      outputChannel.appendLine("[Command] publishArticle triggered.");
+      await publisher.publish();
+    }
+  );
 
-  // Generate Document command
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "aiDocExtra.generateDocument",
-      async () => {
-        outputChannel.appendLine("[aiDocExtra] Generate Document command invoked.");
-        await docGenerator.generateDocument();
+  // 打开配置命令
+  const configCmd = vscode.commands.registerCommand(
+    "continue-doc.openConfig",
+    async () => {
+      outputChannel.appendLine("[Command] openConfig triggered.");
+      await openConfigFile(configLoader, texts);
+    }
+  );
+
+  // 切换消息选择命令
+  const toggleCmd = vscode.commands.registerCommand(
+    "continue-doc.toggleMessageInclude",
+    (messageId?: string) => {
+      if (messageId) {
+        messageStore.toggleMessage(messageId);
+      } else {
+        messageStore.toggleAll();
       }
-    )
+      uiProvider.updateWebview();
+    }
   );
 
-  // Publish Article command
+  // 选择会话命令
+  const selectSessionCmd = vscode.commands.registerCommand(
+    "continue-doc.selectSession",
+    async () => {
+      await chatHook.selectSession();
+      uiProvider.updateWebview();
+    }
+  );
+
+  // 刷新消息命令
+  const refreshCmd = vscode.commands.registerCommand(
+    "continue-doc.refreshMessages",
+    async () => {
+      await chatHook.refreshMessages();
+      uiProvider.updateWebview();
+    }
+  );
+
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "aiDocExtra.publishArticle",
-      async () => {
-        outputChannel.appendLine("[aiDocExtra] Publish Article command invoked.");
-        await publisher.publishInteractive();
-      }
-    )
+    generateCmd,
+    publishCmd,
+    configCmd,
+    toggleCmd,
+    selectSessionCmd,
+    refreshCmd
   );
 
-  // Open Configuration command
-  context.subscriptions.push(
-    vscode.commands.registerCommand("aiDocExtra.openConfig", async () => {
-      outputChannel.appendLine("[aiDocExtra] Open Config command invoked.");
-      await configLoader.openConfigFile();
-    })
-  );
-
-  // Toggle Message Include command
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "aiDocExtra.toggleMessageInclude",
-      async () => {
-        // Show quick pick of messages to toggle
-        const messages = messageStore.getAllMessages();
-        if (messages.length === 0) {
-          vscode.window.showInformationMessage(
-            "aiDocExtra: No messages to toggle."
-          );
-          return;
-        }
-
-        const items = messages.map((m) => ({
-          label: `${m.include ? "☑" : "☐"} [${m.role}] ${m.content.substring(0, 60)}`,
-          description: m.include ? "included" : "excluded",
-          id: m.id,
-        }));
-
-        const selected = await vscode.window.showQuickPick(items, {
-          placeHolder: "Select a message to toggle inclusion",
-          title: "aiDocExtra: Toggle Message",
-        });
-
-        if (selected) {
-          messageStore.toggleInclude(selected.id);
-          vscode.window.showInformationMessage(
-            `aiDocExtra: Message ${messageStore.getMessage(selected.id)?.include ? "included" : "excluded"}.`
-          );
-        }
-      }
-    )
-  );
-
-  // ── Step 9: Status Bar ───────────────────────────────────────────────
+  // ───────────────────────────────────────
+  // 7. 创建状态栏项
+  // ───────────────────────────────────────
   const statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100
   );
-  statusBarItem.text = "$(notebook) aiDocExtra";
-  statusBarItem.tooltip = "aiDocExtra - AI Documentation Generator";
-  statusBarItem.command = "aiDocExtra.generateDocument";
+  statusBarItem.text = "$(notebook) Continue-Doc";
+  statusBarItem.tooltip = "Continue-Doc - Document Generator";
+  statusBarItem.command = "continue-doc.generateDocument";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  // Update status bar with message count
-  messageStore.onMessagesChanged((messages) => {
-    const included = messages.filter((m) => m.include).length;
-    statusBarItem.text = `$(notebook) aiDocExtra [${included}/${messages.length}]`;
+  // ───────────────────────────────────────
+  // 8. 监听配置变化
+  // ───────────────────────────────────────
+  const configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("continue-doc")) {
+      outputChannel.appendLine("[Extension] Configuration changed, reloading...");
+      configLoader.loadConfig().then(() => {
+        const newLang = configLoader.getLanguage();
+        uiProvider.updateLanguage(newLang);
+        uiProvider.updateWebview();
+      });
+    }
   });
+  context.subscriptions.push(configWatcher);
 
-  // ── Step 10: Register Disposables ────────────────────────────────────
+  // ───────────────────────────────────────
+  // 9. 清理
+  // ───────────────────────────────────────
   context.subscriptions.push(
-    { dispose: () => configLoader.dispose() },
-    { dispose: () => messageStore.dispose() },
-    { dispose: () => chatHook.dispose() },
-    { dispose: () => panelProvider.dispose() },
-    { dispose: () => continuePanelProvider.dispose() },
-    outputChannel
+    new vscode.Disposable(() => {
+      chatHook.dispose();
+      uiProvider.dispose();
+      outputChannel.appendLine("Continue-Doc deactivated.");
+    })
   );
 
-  outputChannel.appendLine("[aiDocExtra] Extension activated successfully.");
+  outputChannel.appendLine("Continue-Doc activated successfully!");
+}
+
+/**
+ * 打开配置文件
+ */
+async function openConfigFile(
+  configLoader: ConfigLoader,
+  texts: { configOpenFailed: string }
+): Promise<void> {
+  const configUri = configLoader.getConfigUri();
+  if (configUri) {
+    const doc = await vscode.workspace.openTextDocument(configUri);
+    await vscode.window.showTextDocument(doc);
+  } else {
+    // 如果配置文件不存在，先加载（这会创建默认配置）然后打开
+    await configLoader.loadConfig();
+    const newUri = configLoader.getConfigUri();
+    if (newUri) {
+      const doc = await vscode.workspace.openTextDocument(newUri);
+      await vscode.window.showTextDocument(doc);
+    } else {
+      vscode.window.showErrorMessage(texts.configOpenFailed);
+    }
+  }
 }
 
 export function deactivate(): void {
-  outputChannel?.appendLine("[aiDocExtra] Extension deactivated.");
+  outputChannel?.appendLine("Continue-Doc deactivated.");
 }

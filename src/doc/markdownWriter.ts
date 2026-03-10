@@ -1,101 +1,120 @@
 /**
- * Markdown Writer
- * Writes generated Markdown documents to the output directory.
+ * Markdown 文件输出
+ * Markdown file output writer
  */
 
-import * as vscode from "vscode";
-import * as path from "path";
 import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 
 export class MarkdownWriter {
+  private outputChannel: vscode.OutputChannel;
+
+  constructor(outputChannel: vscode.OutputChannel) {
+    this.outputChannel = outputChannel;
+  }
+
   /**
-   * Write markdown content to a file in the output directory.
-   * Returns the full path of the written file.
+   * 将内容写入 Markdown 文件
+   * Write content to a Markdown file
+   *
+   * @param content - Markdown 内容
+   * @param outputDir - 输出目录
+   * @param title - 可选的文档标题（用于文件名）
+   * @returns 写入的文件路径
    */
   async writeDocument(
-    outputDir: string,
     content: string,
+    outputDir: string,
     title?: string
   ): Promise<string> {
-    // Ensure output directory exists
+    // 确保输出目录存在
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // Generate filename from date and optional title
-    const now = new Date();
-    const dateStr = this.formatDate(now);
-    const slug = title ? `-${this.slugify(title)}` : "";
-    const filename = `${dateStr}${slug}.md`;
-    const filepath = path.join(outputDir, filename);
+    // 生成文件名
+    const fileName = this.generateFileName(title);
+    const filePath = path.join(outputDir, fileName);
 
-    // Add frontmatter
-    const fullContent = this.addFrontmatter(content, title, now);
-
-    // Write file
-    fs.writeFileSync(filepath, fullContent, "utf-8");
-
-    return filepath;
+    // 写入文件
+    try {
+      fs.writeFileSync(filePath, content, "utf-8");
+      this.outputChannel.appendLine(
+        `[MarkdownWriter] Document written to: ${filePath}`
+      );
+      return filePath;
+    } catch (error: any) {
+      this.outputChannel.appendLine(
+        `[MarkdownWriter] Error writing file: ${error.message}`
+      );
+      throw error;
+    }
   }
 
   /**
-   * Open a generated document in the editor
+   * 生成文件名
+   * Generate a file name based on timestamp and optional title
    */
-  async openDocument(filepath: string): Promise<void> {
-    const doc = await vscode.workspace.openTextDocument(filepath);
-    await vscode.window.showTextDocument(doc, {
-      preview: false,
-      viewColumn: vscode.ViewColumn.One,
-    });
+  private generateFileName(title?: string): string {
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    if (title) {
+      // 从标题中提取简短的 slug
+      const slug = this.slugify(title);
+      return `${dateStr}-${slug}.md`;
+    }
+
+    // 使用时间戳
+    const timeStr = now.toISOString().slice(11, 19).replace(/:/g, "");
+    return `${dateStr}-${timeStr}.md`;
   }
 
   /**
-   * List all existing documents in the output directory
+   * 将标题转换为文件名安全的 slug
+   * Convert title to a filename-safe slug
+   */
+  private slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/[^\w\u4e00-\u9fff\s-]/g, "") // 保留中文字符
+      .replace(/[\s_]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .substring(0, 50);
+  }
+
+  /**
+   * 从生成的 Markdown 中提取标题
+   * Extract the title from generated Markdown content
+   */
+  extractTitle(content: string): string | undefined {
+    // 匹配第一个 # 标题
+    const match = content.match(/^#\s+(.+)$/m);
+    return match?.[1]?.trim();
+  }
+
+  /**
+   * 列出输出目录中的所有文档
+   * List all documents in the output directory
    */
   listDocuments(outputDir: string): string[] {
     if (!fs.existsSync(outputDir)) {
       return [];
     }
+
     return fs
       .readdirSync(outputDir)
       .filter((f) => f.endsWith(".md"))
       .sort()
-      .reverse(); // Most recent first
+      .reverse(); // 最新的在前
   }
 
-  /** Format date as YYYY-MM-DD */
-  private formatDate(date: Date): string {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
-  /** Convert title to URL-friendly slug */
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s\u4e00-\u9fff-]/g, "") // Keep Chinese chars
-      .replace(/[\s_]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .substring(0, 60);
-  }
-
-  /** Add YAML frontmatter to the document */
-  private addFrontmatter(
-    content: string,
-    title: string | undefined,
-    date: Date
-  ): string {
-    const frontmatter = [
-      "---",
-      `title: "${title || "AI Generated Document"}"`,
-      `date: ${date.toISOString()}`,
-      `generator: aiDocExtra`,
-      "---",
-      "",
-    ].join("\n");
-
-    return frontmatter + content;
+  /**
+   * 读取文档内容
+   * Read document content
+   */
+  readDocument(filePath: string): string {
+    return fs.readFileSync(filePath, "utf-8");
   }
 }

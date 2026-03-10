@@ -1,243 +1,216 @@
 /**
- * Document Generator
- * Orchestrates the document generation pipeline:
- *   Selected Messages → Prompt → AI Model → Markdown → File
+ * 文档生成编排
+ * Document generation orchestration
  */
 
 import * as vscode from "vscode";
 import { MessageStore } from "../chat/messageStore";
-import { ConfigLoader } from "../config/configLoader";
 import { PromptBuilder } from "./promptBuilder";
 import { MarkdownWriter } from "./markdownWriter";
-import { DocMessage } from "../types";
+import { ConfigLoader } from "../config/configLoader";
+import { GenerateResult } from "../types";
+import { getTexts } from "../i18n";
 
 export class DocGenerator {
+  private outputChannel: vscode.OutputChannel;
+  private messageStore: MessageStore;
   private promptBuilder: PromptBuilder;
   private markdownWriter: MarkdownWriter;
-  private outputChannel: vscode.OutputChannel;
+  private configLoader: ConfigLoader;
 
   constructor(
-    private messageStore: MessageStore,
-    private configLoader: ConfigLoader,
-    outputChannel: vscode.OutputChannel
+    outputChannel: vscode.OutputChannel,
+    messageStore: MessageStore,
+    configLoader: ConfigLoader
   ) {
-    this.promptBuilder = new PromptBuilder(configLoader.getConfig());
-    this.markdownWriter = new MarkdownWriter();
     this.outputChannel = outputChannel;
-
-    // Keep prompt builder config in sync
-    configLoader.onConfigChanged((config) => {
-      this.promptBuilder.updateConfig(config);
-    });
+    this.messageStore = messageStore;
+    this.configLoader = configLoader;
+    this.promptBuilder = new PromptBuilder(configLoader.getConfig());
+    this.markdownWriter = new MarkdownWriter(outputChannel);
   }
 
   /**
-   * Main entry point: generate a document from selected messages.
+   * 生成文档
+   * Generate a document from selected messages
    */
-  async generateDocument(): Promise<string | undefined> {
-    const messages = this.messageStore.getIncludedMessages();
+  async generate(): Promise<GenerateResult> {
+    const config = this.configLoader.getConfig();
+    const texts = getTexts(config.language || "zh");
 
-    if (messages.length === 0) {
-      vscode.window.showWarningMessage(
-        "aiDocExtra: No messages selected for documentation. " +
-          "Add messages first, then try again."
-      );
-      return undefined;
+    // 更新 PromptBuilder 的配置
+    this.promptBuilder.updateConfig(config);
+
+    // 获取已选中的消息
+    const selectedMessages = this.messageStore.getSelectedMessages();
+
+    if (selectedMessages.length === 0) {
+      vscode.window.showWarningMessage(texts.noSelectedMessages);
+      return {
+        success: false,
+        message: texts.noSelectedMessages,
+      };
     }
 
     this.outputChannel.appendLine(
-      `[DocGenerator] Generating document from ${messages.length} messages...`
+      `[DocGenerator] Generating document from ${selectedMessages.length} messages...`
     );
 
-    return vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: "aiDocExtra: Generating document...",
-        cancellable: true,
-      },
-      async (progress, token) => {
-        try {
-          // Step 1: Build the prompt
-          progress.report({ message: "Building prompt...", increment: 10 });
-          const prompt = this.promptBuilder.buildDocumentPrompt(messages);
+    try {
+      // 显示进度
+      return await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: texts.generating,
+          cancellable: false,
+        },
+        async (progress) => {
+          progress.report({ increment: 10, message: "Building prompt..." });
 
-          if (token.isCancellationRequested) {
-            return undefined;
+          // 1. 构建提示词
+          const prompt = this.promptBuilder.buildDocPrompt(selectedMessages);
+
+          progress.report({ increment: 20, message: "Sending to AI..." });
+
+          // 2. 使用 AI 模型生成文档
+          let generatedContent: string;
+
+          try {
+            generatedContent = await this.callAIModel(prompt);
+          } catch (aiError: any) {
+            // 如果 AI 调用失败，使用简单的格式化作为回退
+            this.outputChannel.appendLine(
+              `[DocGenerator] AI call failed, using fallback: ${aiError.message}`
+            );
+            generatedContent = this.fallbackGenerate(selectedMessages);
           }
 
-          // Step 2: Generate content using AI
-          progress.report({
-            message: "Generating content with AI...",
-            increment: 30,
-          });
-          const generatedContent = await this.generateWithAI(
-            prompt,
-            messages,
-            token
-          );
+          progress.report({ increment: 50, message: "Writing file..." });
 
-          if (!generatedContent || token.isCancellationRequested) {
-            return undefined;
-          }
+          // 3. 提取标题
+          const title = this.markdownWriter.extractTitle(generatedContent);
 
-          // Step 3: Extract or generate title
-          progress.report({ message: "Finalizing...", increment: 30 });
-          const title = this.extractTitle(generatedContent);
-
-          // Step 4: Write to file
-          progress.report({ message: "Writing file...", increment: 20 });
-          const outputDir = this.configLoader.getOutputDir();
-          const filepath = await this.markdownWriter.writeDocument(
-            outputDir,
+          // 4. 写入文件
+          const outputDir = this.configLoader.ensureOutputDir();
+          const filePath = await this.markdownWriter.writeDocument(
             generatedContent,
+            outputDir,
             title
           );
 
-          // Step 5: Open in editor
-          progress.report({ message: "Done!", increment: 10 });
-          await this.markdownWriter.openDocument(filepath);
+          progress.report({ increment: 20, message: "Done!" });
 
-          this.outputChannel.appendLine(
-            `[DocGenerator] Document saved: ${filepath}`
-          );
+          // 5. 在编辑器中打开文件
+          const doc = await vscode.workspace.openTextDocument(filePath);
+          await vscode.window.showTextDocument(doc, { preview: false });
+
           vscode.window.showInformationMessage(
-            `aiDocExtra: Document generated successfully!`
+            `${texts.docGeneratedSuccess}${filePath}`
           );
 
-          return filepath;
-        } catch (err) {
+          return {
+            success: true,
+            filePath,
+            title: title || "Untitled",
+            message: texts.docGeneratedSuccess,
+          };
+        }
+      );
+    } catch (error: any) {
+      this.outputChannel.appendLine(
+        `[DocGenerator] Error: ${error.message}`
+      );
+      vscode.window.showErrorMessage(`${texts.error}: ${error.message}`);
+      return {
+        success: false,
+        message: error.message,
+      };
+    }
+  }
+
+  /**
+   * 调用 AI 模型生成文档
+   * Call AI model to generate documentation
+   *
+   * 尝试通过 VSCode Language Model API (Copilot) 或其他方式调用 AI
+   */
+  private async callAIModel(prompt: string): Promise<string> {
+    // 方式 1：尝试使用 VSCode Chat API（vscode.lm）
+    try {
+      const models = await vscode.lm.selectChatModels({ family: "gpt-4" });
+      if (models.length > 0) {
+        const model = models[0];
+        const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+        const response = await model.sendRequest(messages);
+
+        let result = "";
+        for await (const chunk of response.text) {
+          result += chunk;
+        }
+
+        if (result.trim()) {
           this.outputChannel.appendLine(
-            `[DocGenerator] Error: ${err}`
+            "[DocGenerator] Document generated via VSCode LM API."
           );
-          vscode.window.showErrorMessage(
-            `aiDocExtra: Document generation failed: ${err}`
-          );
-          return undefined;
+          return result;
         }
       }
-    );
-  }
-
-  /**
-   * Generate content using AI.
-   * Tries multiple strategies:
-   * 1. Direct prompt to Continue via command
-   * 2. Fallback: Build a well-structured document from messages directly
-   */
-  private async generateWithAI(
-    prompt: string,
-    messages: DocMessage[],
-    token: vscode.CancellationToken
-  ): Promise<string | undefined> {
-    // Strategy: Since we cannot directly get AI response from Continue's API
-    // programmatically, we generate a structured document from the conversation
-    // ourselves, using the prompt rules as guidance.
-    //
-    // In future versions, this could integrate with Continue's API or
-    // use a direct LLM API call.
-
-    return this.buildStructuredDocument(messages);
-  }
-
-  /**
-   * Build a structured Markdown document from messages.
-   * This is the built-in document builder that doesn't require external AI.
-   */
-  private buildStructuredDocument(messages: DocMessage[]): string {
-    const config = this.configLoader.getConfig();
-    const sections: string[] = [];
-
-    // Title - derived from first user message
-    const firstUserMsg = messages.find((m) => m.role === "user");
-    const title = firstUserMsg
-      ? this.generateTitle(firstUserMsg.content)
-      : "AI Conversation Document";
-
-    sections.push(`# ${title}\n`);
-
-    // Summary
-    sections.push(`## Summary\n`);
-    sections.push(
-      `This document was generated from an AI-assisted conversation ` +
-        `containing ${messages.length} messages.\n`
-    );
-
-    // Table of contents based on conversation turns
-    const userMessages = messages.filter((m) => m.role === "user");
-    if (userMessages.length > 1) {
-      sections.push(`## Topics Discussed\n`);
-      userMessages.forEach((m, i) => {
-        const topic = m.content.split("\n")[0].substring(0, 80);
-        sections.push(`${i + 1}. ${topic}`);
-      });
-      sections.push("");
+    } catch (lmError: any) {
+      this.outputChannel.appendLine(
+        `[DocGenerator] VSCode LM API not available: ${lmError.message}`
+      );
     }
 
-    // Conversation content - organized by Q&A pairs
-    sections.push(`## Conversation Details\n`);
-
-    let pairIndex = 0;
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-
-      if (msg.role === "user") {
-        pairIndex++;
-        sections.push(
-          `### ${pairIndex}. ${msg.content.split("\n")[0].substring(0, 100)}\n`
+    // 方式 2：尝试通过 Continue 的命令调用
+    try {
+      // Continue 可能暴露了命令来发送请求
+      const result = await vscode.commands.executeCommand<string>(
+        "continue.sendToModel",
+        prompt
+      );
+      if (result && typeof result === "string" && result.trim()) {
+        this.outputChannel.appendLine(
+          "[DocGenerator] Document generated via Continue command."
         );
-        sections.push(`**Question:**\n`);
-        sections.push(msg.content);
-        sections.push("");
-
-        // Look for the corresponding assistant response
-        if (i + 1 < messages.length && messages[i + 1].role === "assistant") {
-          const response = messages[i + 1];
-          sections.push(`**Answer:**\n`);
-          sections.push(response.content);
-          if (response.model) {
-            sections.push(`\n*Model: ${response.model}*`);
-          }
-          sections.push("");
-          i++; // Skip the assistant message in the next iteration
-        }
-      } else {
-        // Standalone assistant message
-        pairIndex++;
-        sections.push(`### ${pairIndex}. AI Response\n`);
-        sections.push(msg.content);
-        if (msg.model) {
-          sections.push(`\n*Model: ${msg.model}*`);
-        }
-        sections.push("");
+        return result;
       }
+    } catch {
+      this.outputChannel.appendLine(
+        "[DocGenerator] Continue command not available."
+      );
     }
 
-    // Footer
-    sections.push(`---\n`);
-    sections.push(
-      `*Generated by aiDocExtra on ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}*\n`
-    );
-
-    return sections.join("\n");
+    // 如果都不可用，抛出错误让调用者使用 fallback
+    throw new Error("No AI model available. Using fallback generation.");
   }
 
   /**
-   * Extract title from generated content (first # heading)
+   * 回退生成：简单地格式化对话内容
+   * Fallback generation: simply format the conversation content
    */
-  private extractTitle(content: string): string | undefined {
-    const match = content.match(/^#\s+(.+)$/m);
-    return match?.[1]?.trim();
-  }
+  private fallbackGenerate(
+    messages: { role: string; content: string }[]
+  ): string {
+    const now = new Date().toISOString().slice(0, 10);
+    const lines: string[] = [];
 
-  /**
-   * Generate a short title from message content
-   */
-  private generateTitle(content: string): string {
-    // Take first line, clean it up
-    const firstLine = content.split("\n")[0].trim();
-    if (firstLine.length <= 80) {
-      return firstLine;
+    lines.push(`# AI 对话记录 - ${now}`);
+    lines.push("");
+    lines.push("> 本文档由 Continue-Doc 自动生成");
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+
+    for (const msg of messages) {
+      const role = msg.role === "user" ? "👤 用户" : "🤖 AI";
+      lines.push(`## ${role}`);
+      lines.push("");
+      lines.push(msg.content);
+      lines.push("");
+      lines.push("---");
+      lines.push("");
     }
-    return firstLine.substring(0, 77) + "...";
+
+    return lines.join("\n");
   }
 }

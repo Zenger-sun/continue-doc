@@ -1,0 +1,37 @@
+# Continue-Doc Default English Configuration
+
+doc:
+  # Document generation rules
+  rules: |
+    Use concise language
+    Remove off-topic discussions
+    Preserve key code snippets
+    Use proper Markdown formatting
+
+  # Output directory for generated documents
+  output_dir: ".continue-doc"
+
+  # Optional: Custom prompt template for document generation
+  prompt_template: |
+    Generate a professional technical document from the following AI conversation.
+    Focus on practical insights and actionable information.
+
+publish:
+  # Default publishing platform
+  target: zhihu
+
+  # Zhihu configuration
+  zhihu:
+    cookie: ""
+    # Add your Zhihu session cookie here for automatic publishing
+
+  # Medium configuration (coming soon)
+  medium:
+    api_token: ""
+
+  # Dev.to configuration (coming soon)
+  devto:
+    api_token: ""
+
+# Language configuration
+language: en  # Options: zh (Chinese) or en (English)

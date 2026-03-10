@@ -1,12 +1,12 @@
 {
-  "name": "aidocextra",
-  "displayName": "aiDocExtra - AI Documentation Generator",
+  "name": "continue-doc",
+  "displayName": "Continue-Doc - Documentation Generator for Continue",
   "description": "AI-powered documentation generation and publishing for Continue chats",
   "version": "0.1.0",
   "license": "MIT",
   "publisher": "zenger-sun",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Productivity",
@@ -27,12 +27,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/aiDocExtra.git"
+    "url": "https://github.com/yourusername/continue-doc.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/aiDocExtra/issues"
+    "url": "https://github.com/yourusername/continue-doc/issues"
   },
-  "homepage": "https://github.com/yourusername/aiDocExtra#readme",
+  "homepage": "https://github.com/yourusername/continue-doc#readme",
   "icon": "resources/icon.png",
   "galleryBanner": {
     "color": "#1E1E1E",
@@ -46,12 +46,12 @@
     },
     {
       "url": "https://img.shields.io/badge/License-MIT-green",
-      "href": "https://github.com/yourusername/aiDocExtra/blob/main/LICENSE",
+      "href": "https://github.com/yourusername/continue-doc/blob/main/LICENSE",
       "description": "MIT License"
     },
     {
       "url": "https://img.shields.io/badge/Status-In%20Development-yellow",
-      "href": "https://github.com/yourusername/aiDocExtra/blob/main/ROADMAP.md",
+      "href": "https://github.com/yourusername/continue-doc/blob/main/ROADMAP.md",
       "description": "Status: In Development"
     }
   ],
@@ -63,79 +63,82 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "aiDocExtra",
-          "title": "aiDocExtra",
+          "id": "continue-doc",
+          "title": "Continue-Doc",
           "icon": "resources/icon.svg"
         }
       ]
     },
     "views": {
-      "aiDocExtra": [
+      "continue-doc": [
         {
           "type": "webview",
-          "id": "aiDocExtra.panel",
-          "name": "aiDocExtra"
-        }
-      ],
-      "continue": [
-        {
-          "type": "webview",
-          "id": "aiDocExtra.continuePanel",
-          "name": "aiDocExtra"
+          "id": "continue-doc.panel",
+          "name": "Continue-Doc"
         }
       ]
     },
     "commands": [
       {
-        "command": "aiDocExtra.generateDocument",
+        "command": "continue-doc.generateDocument",
         "title": "Generate Document",
-        "category": "aiDocExtra"
+        "category": "Continue-Doc"
       },
       {
-        "command": "aiDocExtra.publishArticle",
+        "command": "continue-doc.publishArticle",
         "title": "Publish Article",
-        "category": "aiDocExtra"
+        "category": "Continue-Doc"
       },
       {
-        "command": "aiDocExtra.openConfig",
+        "command": "continue-doc.openConfig",
         "title": "Open Configuration",
-        "category": "aiDocExtra"
+        "category": "Continue-Doc"
       },
       {
-        "command": "aiDocExtra.toggleMessageInclude",
+        "command": "continue-doc.toggleMessageInclude",
         "title": "Toggle Message Include",
-        "category": "aiDocExtra"
+        "category": "Continue-Doc"
+      },
+      {
+        "command": "continue-doc.selectSession",
+        "title": "Select Continue Session",
+        "category": "Continue-Doc"
+      },
+      {
+        "command": "continue-doc.refreshMessages",
+        "title": "Refresh Messages",
+        "category": "Continue-Doc"
       }
     ],
     "menus": {
       "commandPalette": [
         {
-          "command": "aiDocExtra.generateDocument",
+          "command": "continue-doc.generateDocument",
           "when": "resourceScheme == file"
         },
         {
-          "command": "aiDocExtra.publishArticle",
+          "command": "continue-doc.publishArticle",
           "when": "resourceScheme == file"
         },
         {
-          "command": "aiDocExtra.openConfig"
+          "command": "continue-doc.openConfig"
         }
       ]
     },
     "configuration": {
-      "title": "aiDocExtra",
+      "title": "Continue-Doc",
       "properties": {
-        "aiDocExtra.docOutputDir": {
+        "continue-doc.docOutputDir": {
           "type": "string",
-          "default": ".ai-dev-docs",
+          "default": ".continue-doc",
           "description": "Output directory for generated documents"
         },
-        "aiDocExtra.docRules": {
+        "continue-doc.docRules": {
           "type": "string",
           "default": "Use concise language\nRemove off-topic discussions\nPreserve key code snippets\nUse proper Markdown formatting",
           "description": "Rules for document generation"
         },
-        "aiDocExtra.publishTarget": {
+        "continue-doc.publishTarget": {
           "type": "string",
           "enum": [
             "zhihu",
@@ -145,10 +148,19 @@
           "default": "zhihu",
           "description": "Default publishing platform"
         },
-        "aiDocExtra.enableAutoGitCommit": {
+        "continue-doc.enableAutoGitCommit": {
           "type": "boolean",
           "default": false,
           "description": "Automatically commit generated documents to Git"
+        },
+        "continue-doc.language": {
+          "type": "string",
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "default": "zh",
+          "description": "Interface language: zh (Chinese) or en (English)"
         }
       }
     }

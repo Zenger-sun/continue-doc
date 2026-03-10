@@ -1,12 +1,12 @@
-# aiDocExtra - Continue 的 AI 文档生成工具
+# Continue-Doc - Continue 的文档生成和发布工具
 
-> 为您的 Continue 插件增强智能文档生成和发布功能。
+> 为您的 Continue 插件增强文档生成和发布功能。
 
 ## 📚 LANGUAGE SELECT / 语言选择
 
 **简体中文** | [English / 英文](README.en.md)
 
-**⚠️ 本项目是 Continue 的扩展插件，与 Continue 官方无关联。**
+**⚠️ 本项目是 Continue 的扩展插件，只读取记录，不会对原插件进行修改，与 Continue 官方无关联。**
 
 [![VSCode](https://img.shields.io/badge/Made%20for-VSCode-blue)](https://code.visualstudio.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](#license)
@@ -14,7 +14,7 @@
 
 ## 概述
 
-`aiDocExtra` 是一个 VSCode 扩展，通过增加强大的文档生成和发布功能来增强 [Continue](https://continue.dev) 插件。它在您的 AI 对话和精美的技术文档之间架起了一座桥梁。
+`Continue-Doc` 是一个 VSCode 扩展，通过增加强大的文档生成和发布功能来增强 [Continue](https://continue.dev) 插件。它在您的 AI 对话和精美的技术文档之间架起了一座桥梁。
 
 ### 主要功能
 
@@ -29,13 +29,13 @@
 
 ### 系统要求
 
-- **VSCode** 1.80+
+- **VSCode** 1.90+
 - **Continue 插件**已安装并配置
 
 ### 安装步骤
 
 1. 从 VSCode 市场安装 Continue 插件（如果尚未安装）
-2. 从 VSCode 市场安装 `aiDocExtra`
+2. 从 VSCode 市场安装 `Continue-Doc`
 3. 出现提示时重新加载 VSCode
 4. 插件将自动检测您的 Continue 安装
 
@@ -45,64 +45,81 @@
 
 ```
 1. 在 Continue 中进行对话
-2. ☑ 为重要消息勾选"添加到文档"
-3. 点击 ▼ → "生成文档"
-4. 查看生成的 Markdown 文档（位于 `.ai-dev-docs/`）
-5. 如需要可一键发布
+2. 在消息栏中勾选要包含的消息（默认全选）
+3. 点击操作栏 → "生成文档"
+4. 查看生成的 Markdown 文档（位于 `.continue-doc/`）
+5. 如需要可点击 "发布" 一键发布
 ```
 
 ### UI 组件
 
-#### 消息复选框
+#### 消息列表和选择
 
-Continue 聊天中的每条消息都显示"添加到文档"复选框：
+Continue 聊天中实时读取和显示当前对话的所有消息：
 
 ```
-用户问题
-☑ 添加到文档
-
-AI 回答  
-☑ 添加到文档
+消息列表（实时显示）：
+☑ [全选]                          消息统计
+─────────────────────────────────────────────────
+☑ 用户 │ 如何处理错误？
+☑ AI  │ 可以使用 try-catch 来...
+☐ 用户 │ 能举个例子吗？
+☑ AI  │ 当然，这是一个示例...
+☑ 用户 │ 非常感谢
+... (更多消息)
 ```
 
-已勾选的消息（默认勾选）将被纳入文档。
+**消息栏特性：**
+- 🏷️ 每条消息前都有**标签**标识来源（用户/AI）
+- ☑️ 每条消息前有**复选框**，支持单条勾选/取消
+- 📋 顶部有**全选按钮**：
+  - 亮起 = 全部消息已选
+  - 灰色 = 存在未选消息  
+  - 点击切换全选/全不选
+- 📝 默认状态为**全选**
+- 📏 每条消息仅占一行，内容过长自动省略
 
-#### 下拉菜单
+#### 操作栏
 
-位于 Continue 输入区域旁边：
+位于 Continue 输入区域旁边，提供主要操作功能：
 
 ```
 [ 提问 ]   ▼
-        ┌───────────────┐
-        │ 生成文档      │
-        │ 发布          │
-        │ 配置          │
-        │ 帮助          │
-        └───────────────┘
+        ┌──────────────────┐
+        │ 📝 生成文档      │
+        │ 🚀 发布          │
+        │ ⚙️  配置          │
+        └──────────────────┘
 ```
+
+**按钮功能：**
+- **📝 生成文档** - 从消息栏勾选的消息生成专业 Markdown 文档，保存到 `.continue-doc/` 目录
+- **🚀 发布** - 将生成的文档发布到知乎、Medium 等平台
+- **⚙️  配置** - 打开配置文件编辑文档生成规则和发布平台设置
 
 ### 生成文档
 
-1. 点击 **▼** 下拉按钮
-2. 选择 **生成文档**
+1. 在消息栏中选择要包含的消息（默认全选，点击全选按钮可切换）
+2. 点击操作栏中的 **📝 生成文档** 按钮
 3. 插件将：
-   - 收集所有标记为"☑ 添加到文档"的消息
+   - 收集消息栏中所有已勾选的消息
    - 将结构化提示发送到 Continue AI 模型
    - 生成精美的 Markdown 文档
-   - 保存到 `.ai-dev-docs/{timestamp}.md`
+   - 保存到 `.continue-doc/{timestamp}.md`
+4. 文档生成完毕后，可在资源管理器中查看或继续发布
 
 ### 发布文章
 
-1. 生成文档（或从 `.ai-dev-docs/` 选择现有 Markdown）
-2. 点击 **▼** → **发布**
+1. 生成文档（或从 `.continue-doc/` 选择现有 Markdown）
+2. 点击操作栏中的 **🚀 发布** 按钮
 3. 选择目标平台（知乎、Medium 等）
-4. 审查并发布
+4. 审查内容并确认发布
 
 ---
 
 ## 配置
 
-配置通过工作区根目录的 `.aiDocExtra/config.yaml` 进行管理。
+配置通过工作区根目录的 `.continue-doc/config.yaml` 进行管理。
 
 ### 配置示例
 
@@ -116,7 +133,7 @@ doc:
     使用正确的 Markdown 格式
 
   # 生成文档的输出目录
-  output_dir: ".ai-dev-docs"
+  output_dir: ".continue-doc"
 
   # 可选：文档生成的自定义提示模板
   prompt_template: |
@@ -146,23 +163,23 @@ publish:
 | 选项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|-------------|
 | `doc.rules` | string | 内置 | 文档生成指南 |
-| `doc.output_dir` | string | `.ai-dev-docs` | Markdown 文件保存位置 |
+| `doc.output_dir` | string | `.continue-doc` | Markdown 文件保存位置 |
 | `doc.prompt_template` | string | 可选 | 自定义 AI 提示模板 |
 | `publish.target` | string | `zhihu` | 默认发布平台 |
 | `publish.*.cookie` / `*.api_token` | string | 为空 | 平台凭证以实现自动发布 |
+| `continue-doc.language` | string | `zh` | 界面语言：`zh`（中文）或 `en`（English）|
 
 ---
 
 ## 项目结构
 
 ```
-aiDocExtra/
+continue-doc/
 ├── README.md                 # 主 README（语言选择）
 ├── README.zh.md              # 中文文档
 ├── README.en.md              # 英文文档
 ├── LICENSE
 ├── CONTRIBUTING.md           # 贡献指南
-├── ROADMAP.md               # 功能路线图
 ├── package.json
 ├── tsconfig.json
 ├── src/
@@ -186,7 +203,8 @@ aiDocExtra/
 │   └── ui/
 │       └── injectUI.ts            # Webview UI 注入
 └── resources/
-    └── default-config.yaml
+    ├── default-config.yaml
+    └── default-config.en.yaml
 ```
 
 ---
@@ -196,7 +214,7 @@ aiDocExtra/
 ```
 ┌─ VSCode 启动
 │
-├─ aiDocExtra 扩展激活
+├─ Continue-Doc 扩展激活
 │
 ├─ 检测 Continue 安装
 │  ├─ 如果找到 → 继续
@@ -205,11 +223,13 @@ aiDocExtra/
 ├─ 钩接 Continue 聊天 Webview
 │
 ├─ 注入 UI 组件
-│  ├─ 消息复选框
-│  ├─ 下拉菜单
+│  ├─ 消息列表（带全选按钮）
+│  ├─ 操作栏（三个功能按钮）
 │  └─ 状态栏项
 │
-└─ 监视聊天消息
+├─ 读取语言配置（中文/英文）
+│
+└─ 实时监视和读取当前对话消息
 ```
 
 ---
@@ -244,7 +264,7 @@ interface DocMessage {
     ↓
 生成 Markdown
     ↓
-写入 .ai-dev-docs/
+写入 .continue-doc/
 ```
 
 ---
@@ -255,8 +275,8 @@ interface DocMessage {
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/aiDocExtra.git
-cd aiDocExtra
+git clone https://github.com/Zenger-sun/continue-doc.git
+cd continue-doc
 
 # 安装依赖
 npm install
@@ -297,7 +317,7 @@ npm run test
 
 ## 路线图
 
-aiDocExtra 的愿景包括：
+Continue-Doc 的愿景包括：
 
 ### 当前版本（v0.1.0）
 - ✅ 消息选择复选框
@@ -319,8 +339,6 @@ aiDocExtra 的愿景包括：
 - 🔗 文档间交叉引用
 - 🤖 自动摘要生成
 
-详见 [ROADMAP.md](ROADMAP.md) 获取详细的时间表和功能说明。
-
 ---
 
 ## 应用场景
@@ -334,7 +352,7 @@ Continue 聊天
     ↓
 AI 对话（选择性消息）
     ↓
-aiDocExtra 处理
+Continue-Doc 处理
     ↓
 精美的技术文档
     ↓
@@ -363,9 +381,9 @@ aiDocExtra 处理
 
 ```
 your-workspace/
-├── .aiDocExtra/
+├── .continue-doc/
 │   └── config.yaml
-├── .ai-dev-docs/
+├── .continue-doc/
 │   ├── 2026-03-10-ssh-auth.md
 │   ├── 2026-03-11-docker-setup.md
 │   └── ...
@@ -380,18 +398,19 @@ your-workspace/
 
 1. 确保 Continue 已安装且启用
 2. 重新加载 VSCode（`Ctrl+Shift+P` → "开发者：重新加载窗口"）
-3. 查看输出面板中的 `aiDocExtra` 日志
+3. 查看输出面板中的 `Continue-Doc` 日志
 
-### 消息未显示可选择状态
+### 消息栏未显示或无法勾选
 
 1. 确保您在 Continue 聊天界面中
 2. 检查 Continue Webview 是否完全加载
-3. 尝试重新打开 Continue 面板
+3. 消息栏应该始终显示在聊天界面上方
+4. 确保有正在进行的对话内容
 
 ### 文档生成失败
 
 1. 验证您的 Continue AI 模型是否正常工作（在直接聊天中测试）
-2. 检查 `.ai-dev-docs/` 目录的工作区权限
+2. 检查 `.continue-doc/` 目录的工作区权限
 3. 查看输出面板中的错误详情
 
 ---
@@ -416,9 +435,9 @@ your-workspace/
 
 ## 支持
 
-- **问题与错误报告**：[GitHub Issues](https://github.com/yourusername/aiDocExtra/issues)
-- **功能请求**：[GitHub Discussions](https://github.com/yourusername/aiDocExtra/discussions)
-- **文档**：参见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [ROADMAP.md](ROADMAP.md)
+- **问题与错误报告**：[GitHub Issues](https://github.com/Zenger-sun/continue-doc/issues)
+- **功能请求**：[GitHub Discussions](https://github.com/Zenger-sun/continue-doc/discussions)
+- **文档**：参见 [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 

@@ -1,101 +1,114 @@
 /**
- * Message Store
- * Stores and manages chat messages that may be included in documentation.
+ * 消息存储和管理
+ * Message storage and management
  */
 
-import * as vscode from "vscode";
 import { DocMessage } from "../types";
 
 export class MessageStore {
   private messages: DocMessage[] = [];
-  private _onMessagesChanged = new vscode.EventEmitter<DocMessage[]>();
-  public readonly onMessagesChanged = this._onMessagesChanged.event;
+  private listeners: Array<() => void> = [];
 
-  /** Add a new message to the store */
-  addMessage(
-    role: "user" | "assistant",
-    content: string,
-    model?: string
-  ): DocMessage {
-    const msg: DocMessage = {
-      id: this.generateId(),
-      role,
-      content,
-      include: true, // Default: included
-      timestamp: Date.now(),
-      model,
-    };
-    this.messages.push(msg);
-    this._onMessagesChanged.fire(this.messages);
-    return msg;
+  /**
+   * 设置消息列表（替换所有消息）
+   * Set the message list (replaces all messages)
+   */
+  setMessages(messages: DocMessage[]): void {
+    this.messages = messages.map((msg) => ({ ...msg }));
+    this.notifyListeners();
   }
 
-  /** Toggle include status of a message */
-  toggleInclude(id: string): void {
-    const msg = this.messages.find((m) => m.id === id);
+  /**
+   * 获取所有消息
+   * Get all messages
+   */
+  getMessages(): DocMessage[] {
+    return this.messages.map((msg) => ({ ...msg }));
+  }
+
+  /**
+   * 获取已选中的消息
+   * Get selected messages (include=true)
+   */
+  getSelectedMessages(): DocMessage[] {
+    return this.messages.filter((msg) => msg.include).map((msg) => ({ ...msg }));
+  }
+
+  /**
+   * 切换单条消息的选中状态
+   * Toggle a single message's include state
+   */
+  toggleMessage(messageId: string): void {
+    const msg = this.messages.find((m) => m.id === messageId);
     if (msg) {
       msg.include = !msg.include;
-      this._onMessagesChanged.fire(this.messages);
+      this.notifyListeners();
     }
   }
 
-  /** Set include status of a message */
-  setInclude(id: string, include: boolean): void {
-    const msg = this.messages.find((m) => m.id === id);
-    if (msg) {
-      msg.include = include;
-      this._onMessagesChanged.fire(this.messages);
+  /**
+   * 全选/全不选
+   * Select all / Deselect all
+   */
+  toggleAll(include?: boolean): void {
+    const newState = include ?? !this.isAllSelected();
+    for (const msg of this.messages) {
+      msg.include = newState;
     }
+    this.notifyListeners();
   }
 
-  /** Get all messages */
-  getAllMessages(): DocMessage[] {
-    return [...this.messages];
+  /**
+   * 检查是否全选
+   * Check if all messages are selected
+   */
+  isAllSelected(): boolean {
+    return this.messages.length > 0 && this.messages.every((m) => m.include);
   }
 
-  /** Get messages marked for inclusion */
-  getIncludedMessages(): DocMessage[] {
-    return this.messages.filter((m) => m.include);
+  /**
+   * 获取消息数量统计
+   * Get message count statistics
+   */
+  getStats(): { total: number; selected: number } {
+    return {
+      total: this.messages.length,
+      selected: this.messages.filter((m) => m.include).length,
+    };
   }
 
-  /** Get a specific message by ID */
-  getMessage(id: string): DocMessage | undefined {
-    return this.messages.find((m) => m.id === id);
-  }
-
-  /** Remove a message */
-  removeMessage(id: string): void {
-    this.messages = this.messages.filter((m) => m.id !== id);
-    this._onMessagesChanged.fire(this.messages);
-  }
-
-  /** Clear all messages */
+  /**
+   * 清空消息
+   * Clear all messages
+   */
   clear(): void {
     this.messages = [];
-    this._onMessagesChanged.fire(this.messages);
+    this.notifyListeners();
   }
 
-  /** Select all / deselect all */
-  setAllInclude(include: boolean): void {
-    this.messages.forEach((m) => (m.include = include));
-    this._onMessagesChanged.fire(this.messages);
+  /**
+   * 添加变化监听器
+   * Add a change listener
+   */
+  onDidChange(listener: () => void): { dispose: () => void } {
+    this.listeners.push(listener);
+    return {
+      dispose: () => {
+        const idx = this.listeners.indexOf(listener);
+        if (idx >= 0) {
+          this.listeners.splice(idx, 1);
+        }
+      },
+    };
   }
 
-  /** Get count of included messages */
-  getIncludedCount(): number {
-    return this.messages.filter((m) => m.include).length;
-  }
-
-  /** Get total count */
-  getTotalCount(): number {
-    return this.messages.length;
-  }
-
-  private generateId(): string {
-    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  dispose(): void {
-    this._onMessagesChanged.dispose();
+  /**
+   * 通知所有监听器
+   * Notify all listeners
+   */
+  private notifyListeners(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }
