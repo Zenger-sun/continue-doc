@@ -1,0 +1,34 @@
+# aiDocExtra 默认配置
+
+doc:
+  # 文档生成规则
+  rules: |
+    使用简洁的语言
+    去除离题的讨论内容
+    保留关键代码片段
+    使用规范的 Markdown 格式
+
+  # 生成文档的输出目录
+  output_dir: ".ai-dev-docs"
+
+  # 可选：自定义文档生成的提示词模板
+  prompt_template: |
+    根据以下 AI 对话内容，生成一篇专业的技术文档。
+    重点关注实用的见解和可操作的信息。
+
+publish:
+  # 默认发布平台
+  target: zhihu
+
+  # 知乎配置
+  zhihu:
+    cookie: ""
+    # 在此填入你的知乎会话 Cookie，用于自动发布
+
+  # Medium 配置（待实现）
+  medium:
+    api_token: ""
+
+  # Dev.to 配置（待实现）
+  devto:
+    api_token: ""

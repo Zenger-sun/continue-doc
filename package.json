@@ -1,0 +1,191 @@
+{
+  "name": "aidocextra",
+  "displayName": "aiDocExtra - AI Documentation Generator",
+  "description": "AI-powered documentation generation and publishing for Continue chats",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "zenger-sun",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Productivity",
+    "Documentation",
+    "AI"
+  ],
+  "keywords": [
+    "continue",
+    "documentation",
+    "ai",
+    "markdown",
+    "publishing",
+    "vscode-extension",
+    "chat",
+    "blog",
+    "technical-writing",
+    "zhihu"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/aiDocExtra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/aiDocExtra/issues"
+  },
+  "homepage": "https://github.com/yourusername/aiDocExtra#readme",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1E1E1E",
+    "theme": "dark"
+  },
+  "badges": [
+    {
+      "url": "https://img.shields.io/badge/Made%20for-VSCode-blue",
+      "href": "https://code.visualstudio.com/",
+      "description": "Made for VSCode"
+    },
+    {
+      "url": "https://img.shields.io/badge/License-MIT-green",
+      "href": "https://github.com/yourusername/aiDocExtra/blob/main/LICENSE",
+      "description": "MIT License"
+    },
+    {
+      "url": "https://img.shields.io/badge/Status-In%20Development-yellow",
+      "href": "https://github.com/yourusername/aiDocExtra/blob/main/ROADMAP.md",
+      "description": "Status: In Development"
+    }
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiDocExtra",
+          "title": "aiDocExtra",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiDocExtra": [
+        {
+          "type": "webview",
+          "id": "aiDocExtra.panel",
+          "name": "aiDocExtra"
+        }
+      ],
+      "continue": [
+        {
+          "type": "webview",
+          "id": "aiDocExtra.continuePanel",
+          "name": "aiDocExtra"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiDocExtra.generateDocument",
+        "title": "Generate Document",
+        "category": "aiDocExtra"
+      },
+      {
+        "command": "aiDocExtra.publishArticle",
+        "title": "Publish Article",
+        "category": "aiDocExtra"
+      },
+      {
+        "command": "aiDocExtra.openConfig",
+        "title": "Open Configuration",
+        "category": "aiDocExtra"
+      },
+      {
+        "command": "aiDocExtra.toggleMessageInclude",
+        "title": "Toggle Message Include",
+        "category": "aiDocExtra"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "aiDocExtra.generateDocument",
+          "when": "resourceScheme == file"
+        },
+        {
+          "command": "aiDocExtra.publishArticle",
+          "when": "resourceScheme == file"
+        },
+        {
+          "command": "aiDocExtra.openConfig"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "aiDocExtra",
+      "properties": {
+        "aiDocExtra.docOutputDir": {
+          "type": "string",
+          "default": ".ai-dev-docs",
+          "description": "Output directory for generated documents"
+        },
+        "aiDocExtra.docRules": {
+          "type": "string",
+          "default": "Use concise language\nRemove off-topic discussions\nPreserve key code snippets\nUse proper Markdown formatting",
+          "description": "Rules for document generation"
+        },
+        "aiDocExtra.publishTarget": {
+          "type": "string",
+          "enum": [
+            "zhihu",
+            "medium",
+            "custom"
+          ],
+          "default": "zhihu",
+          "description": "Default publishing platform"
+        },
+        "aiDocExtra.enableAutoGitCommit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically commit generated documents to Git"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run esbuild -- --minify",
+    "esbuild": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "build": "npm run esbuild",
+    "watch": "npm run esbuild -- --watch",
+    "compile": "tsc -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^3.3.2",
+    "esbuild": "^0.27.3",
+    "eslint": "^8.55.0",
+    "glob": "^10.3.10",
+    "mocha": "^11.7.5",
+    "typescript": "^5.3.3"
+  },
+
+  "dependencies": {
+    "yaml": "^2.4.1"
+  },
+  "author": {
+    "name": "Zenger Sun",
+    "url": "https://github.com/zenger-sun"
+  }
+}
