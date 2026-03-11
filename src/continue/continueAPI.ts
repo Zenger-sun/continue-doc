@@ -52,9 +52,10 @@ export class ContinueAPI {
    * 调用 AI 模型生成文档
    *
    * @param prompt 完整的提示文本
+   * @param abortSignal 可选的 AbortSignal，用于取消请求
    * @returns AI 生成的文本
    */
-  async complete(prompt: string): Promise<string> {
+  async complete(prompt: string, abortSignal?: AbortSignal): Promise<string> {
     // 方式 1：尝试通过 Continue 命令调用
     try {
       const result = await this.completeViaCommand(prompt);
@@ -62,16 +63,26 @@ export class ContinueAPI {
         return result;
       }
     } catch (err) {
+      // 如果是用户取消，直接抛出
+      if (abortSignal?.aborted) {
+        throw err;
+      }
       logger.debug('ContinueAPI: Command method failed, trying direct API', err);
     }
 
     // 方式 2：直接调用 API
     try {
-      const result = await this.completeViaDirectAPI(prompt);
+      const result = await this.completeViaDirectAPI(prompt, abortSignal);
       if (result) {
         return result;
       }
     } catch (err) {
+      // 如果是用户取消，直接抛出 AbortError
+      if (abortSignal?.aborted) {
+        const abortError = new Error('Generation cancelled by user');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
       logger.error('ContinueAPI: Direct API call failed', err);
     }
 
@@ -103,7 +114,7 @@ export class ContinueAPI {
   /**
    * 方式 2：读取 Continue 配置，直接调用 API
    */
-  private async completeViaDirectAPI(prompt: string): Promise<string | null> {
+  private async completeViaDirectAPI(prompt: string, abortSignal?: AbortSignal): Promise<string | null> {
     const config = this.continueConfig;
     if (!config?.models || config.models.length === 0) {
       throw new AIModelError('No models found in Continue configuration');
@@ -120,22 +131,22 @@ export class ContinueAPI {
       case 'openai':
       case 'free-trial':
       case 'openrouter':
-        return this.callOpenAICompatible(modelConfig, prompt);
+        return this.callOpenAICompatible(modelConfig, prompt, abortSignal);
       case 'ollama':
-        return this.callOllama(modelConfig, prompt);
+        return this.callOllama(modelConfig, prompt, abortSignal);
       case 'gemini':
       case 'google':
-        return this.callGemini(modelConfig, prompt);
+        return this.callGemini(modelConfig, prompt, abortSignal);
       default:
         // 默认尝试 OpenAI 兼容格式
-        return this.callOpenAICompatible(modelConfig, prompt);
+        return this.callOpenAICompatible(modelConfig, prompt, abortSignal);
     }
   }
 
   /**
    * 调用 OpenAI 兼容 API（OpenAI、OpenRouter 等）
    */
-  private async callOpenAICompatible(config: ContinueModelConfig, prompt: string): Promise<string> {
+  private async callOpenAICompatible(config: ContinueModelConfig, prompt: string, abortSignal?: AbortSignal): Promise<string> {
     const apiBase = (config.apiBase || 'https://api.openai.com/v1').replace(/\/$/, '');
     const apiKey = config.apiKey || '';
     const model = config.model || 'gpt-4';
@@ -157,6 +168,7 @@ export class ContinueAPI {
         max_tokens: 4000,
         temperature: 0.3,
       }),
+      signal: abortSignal,
     });
 
     if (!response.ok) {
@@ -179,7 +191,7 @@ export class ContinueAPI {
   /**
    * 调用 Ollama API
    */
-  private async callOllama(config: ContinueModelConfig, prompt: string): Promise<string> {
+  private async callOllama(config: ContinueModelConfig, prompt: string, abortSignal?: AbortSignal): Promise<string> {
     const apiBase = (config.apiBase || 'http://localhost:11434').replace(/\/$/, '');
     const model = config.model || 'llama3';
 
@@ -198,6 +210,7 @@ export class ContinueAPI {
         ],
         stream: false,
       }),
+      signal: abortSignal,
     });
 
     if (!response.ok) {
@@ -220,7 +233,7 @@ export class ContinueAPI {
   /**
    * 调用 Google Gemini API
    */
-  private async callGemini(config: ContinueModelConfig, prompt: string): Promise<string> {
+  private async callGemini(config: ContinueModelConfig, prompt: string, abortSignal?: AbortSignal): Promise<string> {
     const apiKey = config.apiKey || '';
     const model = config.model || 'gemini-pro';
 
@@ -243,6 +256,7 @@ export class ContinueAPI {
           maxOutputTokens: 4000,
         },
       }),
+      signal: abortSignal,
     });
 
     if (!response.ok) {

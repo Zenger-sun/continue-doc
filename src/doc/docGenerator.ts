@@ -55,14 +55,20 @@ export class DocGenerator {
     const prompt = this.promptBuilder.buildDocumentPrompt(selectedMessages, language);
     logger.debug('DocGenerator: Prompt constructed', { length: prompt.length });
 
-    // 步骤 3：显示进度条
+    // 步骤 3：显示进度条（支持取消）
     return vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: language === 'zh' ? '正在生成文档...' : 'Generating document...',
-        cancellable: false,
+        cancellable: true,
       },
-      async (progress) => {
+      async (progress, token) => {
+        // 将 CancellationToken 转换为 AbortController，以便取消 fetch 请求
+        const abortController = new AbortController();
+        const cancellationListener = token.onCancellationRequested(() => {
+          abortController.abort();
+        });
+
         try {
           // 步骤 4：调用 AI 模型
           progress.report({
@@ -70,7 +76,11 @@ export class DocGenerator {
             message: language === 'zh' ? 'AI 正在整理内容...' : 'AI is organizing content...',
           });
 
-          const aiResponse = await this.continueAPI.complete(prompt);
+          if (token.isCancellationRequested) {
+            throw new DocGenerationError(language === 'zh' ? '用户已取消生成' : 'Generation cancelled by user');
+          }
+
+          const aiResponse = await this.continueAPI.complete(prompt, abortController.signal);
 
           if (!aiResponse || aiResponse.trim().length === 0) {
             throw new DocGenerationError('AI returned empty response');
@@ -109,6 +119,14 @@ export class DocGenerator {
           return filePath;
 
         } catch (err) {
+          // 处理用户取消的情况
+          if (token.isCancellationRequested || (err instanceof Error && err.name === 'AbortError')) {
+            const cancelMsg = language === 'zh' ? '文档生成已取消' : 'Document generation cancelled';
+            logger.info(`DocGenerator: ${cancelMsg}`);
+            vscode.window.showInformationMessage(cancelMsg);
+            throw new DocGenerationError(cancelMsg);
+          }
+
           logger.error('DocGenerator: Generation failed', err);
 
           if (err instanceof NoMessagesSelectedError || err instanceof DocGenerationError) {
@@ -118,6 +136,8 @@ export class DocGenerator {
           throw new DocGenerationError(
             `Document generation failed: ${err instanceof Error ? err.message : String(err)}`
           );
+        } finally {
+          cancellationListener.dispose();
         }
       }
     );
