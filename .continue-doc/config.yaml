@@ -1,36 +1,45 @@
-# Continue-Doc 配置文件
+# Continue-Doc Default English Configuration
 
 doc:
-  # 文档生成规则
-  rules: |-
-    使用简洁的语言
-    删除离题讨论  
-    保留关键代码片段
-    使用正确的 Markdown 格式
-  
-  # 生成文档的输出目录
-  output_dir: .continue-doc
-  
-  # 可选：自定义文档生成的提示词模板
-  prompt_template: >-
-    从以下 AI 对话中生成专业的技术文档。
-    重点关注实用见解和可操作的信息。
+  # Document generation rules
+  rules: |
+    使用简洁清晰的语言
+    删除重复或离题的讨论
+    保留关键代码片段和技术细节
+    使用标准 Markdown 格式
+    添加问题、解决方案、示例等结构化标题
+
+  # Output directory for generated documents
+  output_dir: ".continue-doc"
+
+  # Optional: Custom prompt template for document generation
+  prompt_template: |
+    请从以下 AI 对话中生成专业的技术文档。
+    输出格式必须是 Markdown。
+    重点关注：
+    - 问题描述
+    - 解决方案步骤
+    - 代码示例
+    - 关键要点
+    - 必要时引用保存的图片
+    - 如还有剩余问题没有解决需要列出来
 
 publish:
-  # 默认发布平台
+  # Default publishing platform
   target: zhihu
-  
-  # 知乎配置
+
+  # Zhihu configuration
   zhihu:
     cookie: ""
-  
-  # Medium 配置
+    # Add your Zhihu session cookie here for automatic publishing
+
+  # Medium configuration (coming soon)
   medium:
     api_token: ""
-  
-  # Dev.to 配置
+
+  # Dev.to configuration (coming soon)
   devto:
     api_token: ""
 
-# 语言配置
-language: zh  # 选项: zh (中文) 或 en (English)
+# Language configuration
+language: en  # Options: zh (Chinese) or en (English)

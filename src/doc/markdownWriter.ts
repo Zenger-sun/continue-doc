@@ -1,120 +1,132 @@
+import * as vscode from 'vscode';
+import * as path from 'path';
+import { logger } from '../utils/logger';
+
 /**
- * Markdown 文件输出
- * Markdown file output writer
+ * Markdown 文件写入器
+ *
+ * 负责将 AI 生成的文档保存为 Markdown 文件
+ *
+ * 文件命名规则（来自 mind.md）：
+ * YYYY-MM-DD-topic.md
+ * 示例：2026-03-11-fix-ssh-auth.md
  */
-
-import * as fs from "fs";
-import * as path from "path";
-import * as vscode from "vscode";
-
 export class MarkdownWriter {
-  private outputChannel: vscode.OutputChannel;
-
-  constructor(outputChannel: vscode.OutputChannel) {
-    this.outputChannel = outputChannel;
-  }
+  constructor(private workspaceRoot: string) {}
 
   /**
-   * 将内容写入 Markdown 文件
-   * Write content to a Markdown file
+   * 保存 Markdown 文档
    *
-   * @param content - Markdown 内容
-   * @param outputDir - 输出目录
-   * @param title - 可选的文档标题（用于文件名）
-   * @returns 写入的文件路径
+   * @param content Markdown 内容
+   * @param outputDir 输出目录（相对于工作区根目录）
+   * @returns 保存的文件路径
    */
-  async writeDocument(
-    content: string,
-    outputDir: string,
-    title?: string
-  ): Promise<string> {
+  async save(content: string, outputDir: string): Promise<string> {
+    // 构建输出目录的完整路径
+    const fullOutputDir = path.join(this.workspaceRoot, outputDir);
+
     // 确保输出目录存在
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
+    const dirUri = vscode.Uri.file(fullOutputDir);
+    try {
+      await vscode.workspace.fs.stat(dirUri);
+    } catch {
+      await vscode.workspace.fs.createDirectory(dirUri);
+      logger.info(`Created output directory: ${fullOutputDir}`);
     }
 
     // 生成文件名
-    const fileName = this.generateFileName(title);
-    const filePath = path.join(outputDir, fileName);
+    const fileName = this.generateFileName(content);
+    const filePath = path.join(fullOutputDir, fileName);
 
     // 写入文件
-    try {
-      fs.writeFileSync(filePath, content, "utf-8");
-      this.outputChannel.appendLine(
-        `[MarkdownWriter] Document written to: ${filePath}`
-      );
-      return filePath;
-    } catch (error: any) {
-      this.outputChannel.appendLine(
-        `[MarkdownWriter] Error writing file: ${error.message}`
-      );
-      throw error;
-    }
+    const uri = vscode.Uri.file(filePath);
+    const data = Buffer.from(content, 'utf-8');
+    await vscode.workspace.fs.writeFile(uri, data);
+
+    logger.info(`Document saved: ${filePath}`);
+    return filePath;
   }
 
   /**
    * 生成文件名
-   * Generate a file name based on timestamp and optional title
+   * 格式：YYYY-MM-DD-topic.md
+   * 从内容的第一个标题提取 topic
    */
-  private generateFileName(title?: string): string {
+  private generateFileName(content: string): string {
     const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const datePart = this.formatDate(now);
 
-    if (title) {
-      // 从标题中提取简短的 slug
-      const slug = this.slugify(title);
-      return `${dateStr}-${slug}.md`;
-    }
+    // 尝试从 Markdown 内容提取标题
+    const topic = this.extractTopic(content);
 
-    // 使用时间戳
-    const timeStr = now.toISOString().slice(11, 19).replace(/:/g, "");
-    return `${dateStr}-${timeStr}.md`;
+    return `${datePart}-${topic}.md`;
   }
 
   /**
-   * 将标题转换为文件名安全的 slug
-   * Convert title to a filename-safe slug
+   * 格式化日期为 YYYY-MM-DD
+   */
+  private formatDate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
+   * 从 Markdown 内容提取主题作为文件名
+   */
+  private extractTopic(content: string): string {
+    // 尝试匹配 # 开头的标题
+    const titleMatch = content.match(/^#\s+(.+)$/m);
+    if (titleMatch) {
+      return this.slugify(titleMatch[1]);
+    }
+
+    // 尝试匹配 ## 开头的标题
+    const subtitleMatch = content.match(/^##\s+(.+)$/m);
+    if (subtitleMatch) {
+      return this.slugify(subtitleMatch[1]);
+    }
+
+    // 使用前20个字符
+    const firstLine = content.trim().split('\n')[0] || 'untitled';
+    return this.slugify(firstLine.substring(0, 30));
+  }
+
+  /**
+   * 将文本转换为 URL 友好的 slug
+   * 支持中英文
    */
   private slugify(text: string): string {
     return text
       .toLowerCase()
-      .replace(/[^\w\u4e00-\u9fff\s-]/g, "") // 保留中文字符
-      .replace(/[\s_]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .substring(0, 50);
+      .trim()
+      // 移除 Markdown 标记
+      .replace(/[#*`\[\]()]/g, '')
+      // 将空格和特殊字符替换为连字符
+      .replace(/[\s/\\:;,!?@#$%^&*()+=<>{}|~`"']+/g, '-')
+      // 移除连续连字符
+      .replace(/-+/g, '-')
+      // 移除首尾连字符
+      .replace(/^-|-$/g, '')
+      // 截断长度
+      .substring(0, 50)
+      || 'untitled';
   }
 
   /**
-   * 从生成的 Markdown 中提取标题
-   * Extract the title from generated Markdown content
+   * 在 VSCode 中打开生成的文档
    */
-  extractTitle(content: string): string | undefined {
-    // 匹配第一个 # 标题
-    const match = content.match(/^#\s+(.+)$/m);
-    return match?.[1]?.trim();
-  }
-
-  /**
-   * 列出输出目录中的所有文档
-   * List all documents in the output directory
-   */
-  listDocuments(outputDir: string): string[] {
-    if (!fs.existsSync(outputDir)) {
-      return [];
+  async openInEditor(filePath: string): Promise<void> {
+    try {
+      const uri = vscode.Uri.file(filePath);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, {
+        viewColumn: vscode.ViewColumn.Beside,
+        preview: false,
+      });
+    } catch (err) {
+      logger.error('Failed to open document in editor', err);
     }
-
-    return fs
-      .readdirSync(outputDir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .reverse(); // 最新的在前
-  }
-
-  /**
-   * 读取文档内容
-   * Read document content
-   */
-  readDocument(filePath: string): string {
-    return fs.readFileSync(filePath, "utf-8");
   }
 }

@@ -1,193 +1,106 @@
+import { logger } from '../utils/logger';
+import { PublishError } from '../utils/errors';
+
 /**
- * Medium 平台发布集成（待实现）
- * Medium platform publishing integration (coming soon)
+ * Medium 发布器（开发中）
+ * 通过 Medium API 发布文章
  */
-
-import * as https from "https";
-import type { OutputChannel } from "vscode";
-import { PublishResult, MediumConfig } from "../types";
-
 export class MediumPublisher {
-  private outputChannel: OutputChannel;
-  private config: MediumConfig;
-
-  constructor(outputChannel: OutputChannel, config: MediumConfig) {
-    this.outputChannel = outputChannel;
-    this.config = config;
-  }
-
-  /**
-   * 更新配置
-   * Update configuration
-   */
-  updateConfig(config: MediumConfig): void {
-    this.config = config;
-  }
+  private readonly API_BASE = 'https://api.medium.com/v1';
 
   /**
    * 发布文章到 Medium
-   * Publish an article to Medium
+   * @param markdownContent Markdown 内容
+   * @param options 发布选项
+   * @returns 文章 URL
    */
   async publish(
-    title: string,
-    content: string,
-    tags?: string[]
-  ): Promise<PublishResult> {
-    if (!this.config.api_token) {
-      return {
-        success: false,
-        platform: "medium",
-        message:
-          "Medium API Token 未配置。请在 .continue-doc/config.yaml 中设置 publish.medium.api_token。",
-      };
+    markdownContent: string,
+    options: {
+      apiToken: string;
+      publication?: string;
+      tags?: string[];
     }
+  ): Promise<string> {
+    logger.info('MediumPublisher: Starting publish');
 
-    this.outputChannel.appendLine(
-      `[MediumPublisher] Publishing article: ${title}`
-    );
+    // 获取用户信息
+    const userId = await this.getUserId(options.apiToken);
 
-    try {
-      // 获取用户信息
-      const userId = await this.getUserId();
-      if (!userId) {
-        return {
-          success: false,
-          platform: "medium",
-          message: "无法获取 Medium 用户信息，请检查 API Token 是否有效。",
-        };
-      }
+    // 提取标题
+    const title = this.extractTitle(markdownContent);
 
-      // 创建文章
-      const result = await this.createPost(userId, title, content, tags);
-      return result;
-    } catch (error: any) {
-      this.outputChannel.appendLine(
-        `[MediumPublisher] Error: ${error.message}`
+    // 发布文章
+    const url = `${this.API_BASE}/users/${userId}/posts`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${options.apiToken}`,
+      },
+      body: JSON.stringify({
+        title,
+        contentFormat: 'markdown',
+        content: markdownContent,
+        tags: options.tags || [],
+        publishStatus: 'draft', // 默认发布为草稿
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new PublishError(
+        `Failed to publish to Medium (${response.status}): ${errorText}`,
+        'medium'
       );
-      return {
-        success: false,
-        platform: "medium",
-        message: `Medium 发布失败: ${error.message}`,
-      };
     }
+
+    const data = await response.json() as { data?: { url?: string } };
+    const articleUrl = data.data?.url;
+
+    if (!articleUrl) {
+      throw new PublishError('Medium API returned no article URL', 'medium');
+    }
+
+    logger.info(`MediumPublisher: Article published at ${articleUrl}`);
+    return articleUrl;
   }
 
   /**
    * 获取 Medium 用户 ID
-   * Get Medium user ID
    */
-  private async getUserId(): Promise<string | null> {
-    return new Promise((resolve) => {
-      const options: https.RequestOptions = {
-        hostname: "api.medium.com",
-        path: "/v1/me",
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.api_token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-      };
+  private async getUserId(apiToken: string): Promise<string> {
+    const url = `${this.API_BASE}/me`;
 
-      const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => {
-          try {
-            const response = JSON.parse(data);
-            if (response.data?.id) {
-              resolve(response.data.id);
-            } else {
-              this.outputChannel.appendLine(
-                `[MediumPublisher] User info response: ${data}`
-              );
-              resolve(null);
-            }
-          } catch {
-            resolve(null);
-          }
-        });
-      });
-
-      req.on("error", () => resolve(null));
-      req.end();
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+      },
     });
+
+    if (!response.ok) {
+      throw new PublishError(
+        `Failed to get Medium user info (${response.status})`,
+        'medium'
+      );
+    }
+
+    const data = await response.json() as { data?: { id?: string } };
+    const userId = data.data?.id;
+
+    if (!userId) {
+      throw new PublishError('Could not get Medium user ID', 'medium');
+    }
+
+    return userId;
   }
 
   /**
-   * 创建 Medium 文章
-   * Create a Medium post
+   * 从 Markdown 提取标题
    */
-  private async createPost(
-    userId: string,
-    title: string,
-    content: string,
-    tags?: string[]
-  ): Promise<PublishResult> {
-    const postData = JSON.stringify({
-      title: title,
-      contentFormat: "markdown",
-      content: content,
-      tags: tags || [],
-      publishStatus: "draft", // 默认保存为草稿
-    });
-
-    return new Promise((resolve) => {
-      const options: https.RequestOptions = {
-        hostname: "api.medium.com",
-        path: `/v1/users/${userId}/posts`,
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.config.api_token}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(postData),
-          Accept: "application/json",
-        },
-      };
-
-      const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => {
-          try {
-            const response = JSON.parse(data);
-            if (response.data?.url) {
-              resolve({
-                success: true,
-                platform: "medium",
-                url: response.data.url,
-                message: `文章已发布到 Medium (草稿): ${response.data.url}`,
-              });
-            } else {
-              this.outputChannel.appendLine(
-                `[MediumPublisher] Post creation response: ${data}`
-              );
-              resolve({
-                success: false,
-                platform: "medium",
-                message: `Medium 发布失败: ${data}`,
-              });
-            }
-          } catch {
-            resolve({
-              success: false,
-              platform: "medium",
-              message: `Medium 发布失败: 无效的响应`,
-            });
-          }
-        });
-      });
-
-      req.on("error", (err) => {
-        resolve({
-          success: false,
-          platform: "medium",
-          message: `Medium 发布失败: ${err.message}`,
-        });
-      });
-
-      req.write(postData);
-      req.end();
-    });
+  private extractTitle(markdown: string): string {
+    const match = markdown.match(/^#\s+(.+)$/m);
+    return match ? match[1].trim() : 'Untitled';
   }
 }

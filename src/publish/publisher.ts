@@ -1,242 +1,154 @@
+import * as vscode from 'vscode';
+import { logger } from '../utils/logger';
+import { PublishError } from '../utils/errors';
+import { ConfigLoader, PublishConfig } from '../config/configLoader';
+import { ZhihuPublisher } from './zhihuPublisher';
+
 /**
- * 发布编排
- * Publishing orchestration - coordinates publishing to various platforms
+ * 发布编排器
+ * 统一管理多平台发布流程
+ *
+ * 流程（来自 mind.md）：
+ * Markdown → 转换 HTML → 调用平台 API
  */
-
-import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
-import { ConfigLoader } from "../config/configLoader";
-import { ZhihuPublisher } from "./zhihuPublisher";
-import { MediumPublisher } from "./mediumPublisher";
-import { PublishResult } from "../types";
-import { getTexts } from "../i18n";
-
 export class Publisher {
-  private outputChannel: vscode.OutputChannel;
-  private configLoader: ConfigLoader;
   private zhihuPublisher: ZhihuPublisher;
-  private mediumPublisher: MediumPublisher;
 
-  constructor(
-    outputChannel: vscode.OutputChannel,
-    configLoader: ConfigLoader
-  ) {
-    this.outputChannel = outputChannel;
-    this.configLoader = configLoader;
-
-    const config = configLoader.getConfig();
-    this.zhihuPublisher = new ZhihuPublisher(
-      outputChannel,
-      config.publish.zhihu || { cookie: "" }
-    );
-    this.mediumPublisher = new MediumPublisher(
-      outputChannel,
-      config.publish.medium || { api_token: "" }
-    );
+  constructor(private readonly configLoader: ConfigLoader) {
+    this.zhihuPublisher = new ZhihuPublisher();
   }
 
   /**
-   * 发布文章
-   * Publish an article to the selected platform
+   * 发布文档到指定平台
+   *
+   * @param markdownContent Markdown 内容
+   * @param platform 目标平台（可选，默认使用配置中的 target）
    */
-  async publish(filePath?: string): Promise<PublishResult> {
-    const config = this.configLoader.getConfig();
-    const texts = getTexts(config.language || "zh");
+  async publish(markdownContent: string, platform?: string): Promise<string> {
+    const config = this.configLoader.getPublishConfig();
+    const targetPlatform = platform || config.target || 'zhihu';
+    const language = this.configLoader.getLanguage();
 
-    // 更新发布器配置
-    this.zhihuPublisher.updateConfig(config.publish.zhihu || { cookie: "" });
-    this.mediumPublisher.updateConfig(
-      config.publish.medium || { api_token: "" }
-    );
+    logger.info(`Publisher: Publishing to ${targetPlatform}`);
 
-    // 1. 选择要发布的文件
-    const targetFile = filePath || (await this.selectDocument());
-    if (!targetFile) {
-      return {
-        success: false,
-        platform: "",
-        message: "未选择文件",
-      };
-    }
+    // 让用户确认
+    const isZh = language === 'zh';
+    const confirmMessage = isZh
+      ? `确认发布到 ${targetPlatform}？`
+      : `Confirm publish to ${targetPlatform}?`;
+    const yesLabel = isZh ? '确认发布' : 'Confirm';
+    const cancelLabel = isZh ? '取消' : 'Cancel';
 
-    // 2. 读取文件内容
-    const content = fs.readFileSync(targetFile, "utf-8");
-    const title = this.extractTitle(content) || path.basename(targetFile, ".md");
-
-    // 3. 选择发布平台
-    const platform = await this.selectPlatform(config.publish.target);
-    if (!platform) {
-      return {
-        success: false,
-        platform: "",
-        message: "未选择平台",
-      };
-    }
-
-    // 4. 确认发布
-    const confirmLabel = config.language === "en" ? "Confirm" : "确认";
-    const confirmMsg = config.language === "en"
-      ? `Publish "${title}" to ${platform}?`
-      : `确认发布 "${title}" 到 ${platform}？`;
-    const cancelledMsg = config.language === "en" ? "Publishing cancelled" : "用户取消发布";
-
-    const confirm = await vscode.window.showInformationMessage(
-      confirmMsg,
+    const choice = await vscode.window.showInformationMessage(
+      confirmMessage,
       { modal: true },
-      confirmLabel
+      yesLabel,
+      cancelLabel
     );
 
-    if (confirm !== confirmLabel) {
-      return {
-        success: false,
-        platform,
-        message: cancelledMsg,
-      };
+    if (choice !== yesLabel) {
+      logger.info('Publisher: User cancelled publishing');
+      throw new PublishError('Publishing cancelled by user', targetPlatform);
     }
 
-    // 5. 执行发布
-    return await vscode.window.withProgress(
+    return vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: texts.publishing,
+        title: isZh ? `正在发布到 ${targetPlatform}...` : `Publishing to ${targetPlatform}...`,
         cancellable: false,
       },
       async () => {
-        let result: PublishResult;
-
-        switch (platform) {
-          case "zhihu":
-            result = await this.zhihuPublisher.publish(title, content);
-            break;
-          case "medium":
-            result = await this.mediumPublisher.publish(title, content);
-            break;
+        switch (targetPlatform.toLowerCase()) {
+          case 'zhihu':
+            return this.publishToZhihu(markdownContent, config);
+          case 'medium':
+            return this.publishToMedium(markdownContent, config);
+          case 'devto':
+            return this.publishToDevto(markdownContent, config);
           default:
-            result = {
-              success: false,
-              platform,
-              message: `不支持的平台: ${platform}`,
-            };
+            throw new PublishError(`Unsupported platform: ${targetPlatform}`, targetPlatform);
         }
-
-        if (result.success) {
-          vscode.window.showInformationMessage(result.message);
-          if (result.url) {
-            const open = await vscode.window.showInformationMessage(
-              `${texts.publishSuccess}${result.url}`,
-              "打开链接"
-            );
-            if (open === "打开链接") {
-              vscode.env.openExternal(vscode.Uri.parse(result.url));
-            }
-          }
-        } else {
-          vscode.window.showErrorMessage(result.message);
-        }
-
-        return result;
       }
     );
-  }
-
-  /**
-   * 选择要发布的文档
-   * Select a document to publish
-   */
-  private async selectDocument(): Promise<string | undefined> {
-    const outputDir = this.configLoader.getOutputDir();
-
-    if (!outputDir || !fs.existsSync(outputDir)) {
-      vscode.window.showWarningMessage(
-        "文档目录不存在。请先生成文档。"
-      );
-      return undefined;
-    }
-
-    // 列出所有 markdown 文件
-    const files = fs
-      .readdirSync(outputDir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .reverse();
-
-    if (files.length === 0) {
-      vscode.window.showWarningMessage(
-        "没有可发布的文档。请先生成文档。"
-      );
-      return undefined;
-    }
-
-    // 显示活跃编辑器中的文件优先
-    const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
-    if (activeFile && activeFile.endsWith(".md") && activeFile.startsWith(outputDir)) {
-      const useActive = await vscode.window.showQuickPick(
-        ["当前文件: " + path.basename(activeFile), "选择其他文件..."],
-        { placeHolder: "选择要发布的文档" }
-      );
-
-      if (useActive?.startsWith("当前文件")) {
-        return activeFile;
-      }
-      if (!useActive) {
-        return undefined;
-      }
-    }
-
-    const items = files.map((f) => ({
-      label: f,
-      description: path.join(outputDir, f),
-    }));
-
-    const selected = await vscode.window.showQuickPick(items, {
-      placeHolder: "选择要发布的文档",
-    });
-
-    return selected ? path.join(outputDir, selected.label) : undefined;
   }
 
   /**
    * 选择发布平台
-   * Select a publishing platform
    */
-  private async selectPlatform(
-    defaultTarget: string
-  ): Promise<string | undefined> {
+  async selectPlatformAndPublish(markdownContent: string): Promise<void> {
+    const language = this.configLoader.getLanguage();
+    const isZh = language === 'zh';
+
     const platforms = [
-      { label: "知乎 (Zhihu)", description: "中文知识分享平台", value: "zhihu" },
-      {
-        label: "Medium",
-        description: "International blogging platform",
-        value: "medium",
-      },
+      { label: isZh ? '知乎' : 'Zhihu', value: 'zhihu', description: isZh ? '已支持' : 'Supported' },
+      { label: 'Medium', value: 'medium', description: isZh ? '开发中' : 'Coming soon' },
+      { label: 'Dev.to', value: 'devto', description: isZh ? '计划中' : 'Planned' },
     ];
 
-    // 将默认平台排在前面
-    platforms.sort((a, b) => {
-      if (a.value === defaultTarget) { return -1; }
-      if (b.value === defaultTarget) { return 1; }
-      return 0;
+    const selected = await vscode.window.showQuickPick(platforms, {
+      placeHolder: isZh ? '选择发布平台' : 'Select publishing platform',
     });
 
-    const selected = await vscode.window.showQuickPick(
-      platforms.map((p) => ({
-        label: p.label,
-        description: p.description,
-        platform: p.value,
-      })),
-      { placeHolder: "选择发布平台" }
-    );
+    if (!selected) {
+      return;
+    }
 
-    return (selected as any)?.platform;
+    try {
+      const url = await this.publish(markdownContent, selected.value);
+      const msg = isZh
+        ? `发布成功！文章链接：${url}`
+        : `Published successfully! Article URL: ${url}`;
+      const openLabel = isZh ? '打开链接' : 'Open URL';
+
+      const action = await vscode.window.showInformationMessage(msg, openLabel);
+      if (action === openLabel) {
+        vscode.env.openExternal(vscode.Uri.parse(url));
+      }
+    } catch (err) {
+      if (err instanceof PublishError && err.message.includes('cancelled')) {
+        return;
+      }
+      const errorMsg = isZh
+        ? `发布失败：${err instanceof Error ? err.message : String(err)}`
+        : `Publish failed: ${err instanceof Error ? err.message : String(err)}`;
+      vscode.window.showErrorMessage(errorMsg);
+    }
   }
 
   /**
-   * 从 Markdown 内容提取标题
-   * Extract title from Markdown content
+   * 发布到知乎
    */
-  private extractTitle(content: string): string | undefined {
-    const match = content.match(/^#\s+(.+)$/m);
-    return match?.[1]?.trim();
+  private async publishToZhihu(content: string, config: PublishConfig): Promise<string> {
+    if (!config.zhihu?.cookie) {
+      throw new PublishError(
+        'Zhihu cookie not configured. Please set it in .continue-doc/config.yaml',
+        'zhihu'
+      );
+    }
+
+    return this.zhihuPublisher.publish(content, {
+      cookie: config.zhihu.cookie,
+      tags: config.zhihu.tags,
+    });
+  }
+
+  /**
+   * 发布到 Medium（待实现）
+   */
+  private async publishToMedium(_content: string, _config: PublishConfig): Promise<string> {
+    throw new PublishError(
+      'Medium publishing is not yet implemented. Coming in v0.2.0',
+      'medium'
+    );
+  }
+
+  /**
+   * 发布到 Dev.to（待实现）
+   */
+  private async publishToDevto(_content: string, _config: PublishConfig): Promise<string> {
+    throw new PublishError(
+      'Dev.to publishing is not yet implemented. Planned for future release.',
+      'devto'
+    );
   }
 }

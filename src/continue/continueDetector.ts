@@ -1,98 +1,91 @@
+import * as vscode from 'vscode';
+import { logger } from '../utils/logger';
+
 /**
- * Continue 安装检测器
- * Detects whether the Continue extension is installed and enabled
+ * Continue 插件检测器
+ * 检查 Continue 是否已安装并处于可用状态
  */
-
-import * as vscode from "vscode";
-
-/** Continue 扩展的可能 ID */
-const CONTINUE_EXTENSION_IDS = [
-  "Continue.continue",
-  "continue.continue",
-];
-
 export class ContinueDetector {
-  private outputChannel: vscode.OutputChannel;
-  private continueExtension: vscode.Extension<any> | undefined;
-
-  constructor(outputChannel: vscode.OutputChannel) {
-    this.outputChannel = outputChannel;
-  }
+  private static readonly CONTINUE_EXTENSION_ID = 'continue.continue';
 
   /**
-   * 检测 Continue 是否已安装
-   * Detect whether Continue is installed
+   * 检查 Continue 是否已安装
    */
-  detect(): boolean {
-    for (const id of CONTINUE_EXTENSION_IDS) {
-      const ext = vscode.extensions.getExtension(id);
-      if (ext) {
-        this.continueExtension = ext;
-        this.outputChannel.appendLine(
-          `[ContinueDetector] Found Continue extension: ${id} (active: ${ext.isActive})`
-        );
-        return true;
-      }
-    }
-
-    this.outputChannel.appendLine(
-      "[ContinueDetector] Continue extension not found."
-    );
-    return false;
-  }
-
-  /**
-   * 获取 Continue 扩展实例
-   * Get the Continue extension instance
-   */
-  getExtension(): vscode.Extension<any> | undefined {
-    return this.continueExtension;
+  static isInstalled(): boolean {
+    const ext = vscode.extensions.getExtension(this.CONTINUE_EXTENSION_ID);
+    return ext !== undefined;
   }
 
   /**
    * 检查 Continue 是否已激活
-   * Check if Continue is active
    */
-  isActive(): boolean {
-    return this.continueExtension?.isActive ?? false;
+  static isActive(): boolean {
+    const ext = vscode.extensions.getExtension(this.CONTINUE_EXTENSION_ID);
+    return ext?.isActive ?? false;
+  }
+
+  /**
+   * 获取 Continue 扩展实例
+   */
+  static getExtension(): vscode.Extension<unknown> | undefined {
+    return vscode.extensions.getExtension(this.CONTINUE_EXTENSION_ID);
   }
 
   /**
    * 等待 Continue 激活
-   * Wait for Continue to be activated
    */
-  async waitForActivation(timeoutMs: number = 10000): Promise<boolean> {
-    if (this.continueExtension?.isActive) {
-      return true;
-    }
-
-    if (!this.continueExtension) {
+  static async waitForActivation(timeoutMs: number = 10000): Promise<boolean> {
+    const ext = vscode.extensions.getExtension(this.CONTINUE_EXTENSION_ID);
+    if (!ext) {
+      logger.warn('Continue extension not found');
       return false;
     }
 
-    try {
-      const activatePromise = this.continueExtension.activate();
-      const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), timeoutMs)
-      );
-
-      const result = await Promise.race([activatePromise, timeoutPromise]);
-      if (result === null) {
-        this.outputChannel.appendLine(
-          "[ContinueDetector] Timeout waiting for Continue activation."
-        );
-        return false;
-      }
-
-      this.outputChannel.appendLine(
-        "[ContinueDetector] Continue extension activated."
-      );
+    if (ext.isActive) {
+      logger.info('Continue extension is already active');
       return true;
-    } catch (error: any) {
-      this.outputChannel.appendLine(
-        `[ContinueDetector] Error activating Continue: ${error.message}`
-      );
-      return false;
     }
+
+    logger.info('Waiting for Continue extension to activate...');
+
+    return new Promise<boolean>((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (ext.isActive) {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          logger.info('Continue extension activated');
+          resolve(true);
+        }
+      }, 500);
+
+      const timeout = setTimeout(() => {
+        clearInterval(checkInterval);
+        logger.warn(`Continue extension did not activate within ${timeoutMs}ms`);
+        resolve(false);
+      }, timeoutMs);
+    });
+  }
+
+  /**
+   * 获取 Continue 版本
+   */
+  static getVersion(): string | undefined {
+    const ext = vscode.extensions.getExtension(this.CONTINUE_EXTENSION_ID);
+    return ext?.packageJSON?.version;
+  }
+
+  /**
+   * 执行诊断检查，返回状态报告
+   */
+  static getDiagnostics(): {
+    installed: boolean;
+    active: boolean;
+    version?: string;
+  } {
+    return {
+      installed: this.isInstalled(),
+      active: this.isActive(),
+      version: this.getVersion(),
+    };
   }
 }
