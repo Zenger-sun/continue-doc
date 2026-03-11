@@ -43,9 +43,11 @@ export class ConfigLoader {
   private config: ContinueDocConfig = { ...DEFAULT_CONFIG };
   private configPath: string = "";
   private outputChannel: vscode.OutputChannel;
+  private extensionUri: vscode.Uri | undefined;
 
-  constructor(outputChannel: vscode.OutputChannel) {
+  constructor(outputChannel: vscode.OutputChannel, extensionUri?: vscode.Uri) {
     this.outputChannel = outputChannel;
+    this.extensionUri = extensionUri;
   }
 
   /**
@@ -169,6 +171,11 @@ export class ConfigLoader {
    * Get the extension installation path
    */
   private getExtensionPath(): string {
+    // 优先使用传入的 extensionUri（开发模式和生产模式都能用）
+    if (this.extensionUri) {
+      return this.extensionUri.fsPath;
+    }
+    // 回退：通过扩展 ID 查找
     const ext = vscode.extensions.getExtension("zenger-sun.continue-doc");
     return ext?.extensionPath ?? "";
   }

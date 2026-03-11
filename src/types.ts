@@ -4,6 +4,17 @@
  */
 
 /**
+ * 消息中的图片信息
+ * Image information within a message
+ */
+export interface MessageImage {
+  /** 图片 URL 或 base64 data URI */
+  url: string;
+  /** 保存到本地后的相对路径 */
+  localPath?: string;
+}
+
+/**
  * 文档消息接口
  * Represents a single message from a Continue chat conversation
  */
@@ -14,6 +25,8 @@ export interface DocMessage {
   role: "user" | "assistant";
   /** 消息文本 / Message text */
   content: string;
+  /** 消息中包含的图片 / Images included in the message */
+  images?: MessageImage[];
   /** 是否纳入文档 / Whether to include in document */
   include: boolean;
   /** Unix 时间戳 / Unix timestamp */
@@ -155,4 +168,6 @@ export interface I18nTexts {
   docGeneratedSuccess: string;
   publishSuccess: string;
   selectPlatform: string;
+  clickRefreshToLoad?: string;
+  refresh?: string;
 }

@@ -3,20 +3,18 @@
 doc:
   # 文档生成规则
   rules: |-
-    Use concise language
-    Remove off-topic discussions
-    Preserve key code snippets
-    Use proper Markdown formatting
+    使用简洁的语言
+    删除离题讨论  
+    保留关键代码片段
+    使用正确的 Markdown 格式
   
   # 生成文档的输出目录
   output_dir: .continue-doc
   
   # 可选：自定义文档生成的提示词模板
   prompt_template: >-
-    Generate a professional technical document from the following AI
-    conversation.
-
-    Focus on practical insights and actionable information.
+    从以下 AI 对话中生成专业的技术文档。
+    重点关注实用见解和可操作的信息。
 
 publish:
   # 默认发布平台

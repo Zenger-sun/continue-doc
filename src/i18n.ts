@@ -25,6 +25,8 @@ const zhTexts: I18nTexts = {
   docGeneratedSuccess: "文档已生成：",
   publishSuccess: "文章已发布：",
   selectPlatform: "选择发布平台",
+  clickRefreshToLoad: "点击下方刷新按钮加载消息",
+  refresh: "刷新",
 };
 
 const enTexts: I18nTexts = {
@@ -48,6 +50,8 @@ const enTexts: I18nTexts = {
   docGeneratedSuccess: "Document generated: ",
   publishSuccess: "Article published: ",
   selectPlatform: "Select publishing platform",
+  clickRefreshToLoad: "Click the Refresh button below to load messages",
+  refresh: "Refresh",
 };
 
 /**

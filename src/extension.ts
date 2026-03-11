@@ -34,7 +34,7 @@ export async function activate(
   // ───────────────────────────────────────
   // 1. 加载配置
   // ───────────────────────────────────────
-  const configLoader = new ConfigLoader(outputChannel);
+  const configLoader = new ConfigLoader(outputChannel, context.extensionUri);
   const config = await configLoader.loadConfig();
   const language = configLoader.getLanguage();
   const texts = getTexts(language);
@@ -77,7 +77,7 @@ export async function activate(
   // ───────────────────────────────────────
   const uiProvider = new InjectUI(outputChannel, messageStore, language, {
     onGenerateDoc: async () => {
-      await docGenerator.generate();
+      return await docGenerator.generate();
     },
     onPublish: async () => {
       await publisher.publish();
@@ -105,6 +105,10 @@ export async function activate(
     "continue-doc.generateDocument",
     async () => {
       outputChannel.appendLine("[Command] generateDocument triggered.");
+      outputChannel.appendLine(
+        `[Command] messageStore has ${messageStore.getStats().total} messages, ${messageStore.getStats().selected} selected`
+      );
+      outputChannel.show(true); // 打开 output channel 让用户看到日志
       await docGenerator.generate();
     }
   );
@@ -158,13 +162,59 @@ export async function activate(
     }
   );
 
+  // 诊断命令：显示当前状态信息
+  const diagCmd = vscode.commands.registerCommand(
+    "continue-doc.showDiagnostics",
+    async () => {
+      outputChannel.show(true);
+      outputChannel.appendLine("\n===== DIAGNOSTICS =====");
+      outputChannel.appendLine(`Continue found: ${continueFound}`);
+      outputChannel.appendLine(`Workspace root: ${configLoader.getWorkspaceRoot() || "(none)"}`);
+      outputChannel.appendLine(`Output dir: ${configLoader.getOutputDir() || "(none)"}`);
+      outputChannel.appendLine(`Language: ${configLoader.getLanguage()}`);
+      const stats = messageStore.getStats();
+      outputChannel.appendLine(`Messages: total=${stats.total}, selected=${stats.selected}`);
+
+      // 检查 sessions 目录
+      const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+      const sessionsDir = require("path").join(homeDir, ".continue", "sessions");
+      const fs = require("fs");
+      if (fs.existsSync(sessionsDir)) {
+        const files = fs.readdirSync(sessionsDir).filter((f: string) => f.endsWith(".json"));
+        outputChannel.appendLine(`Sessions dir: ${sessionsDir}`);
+        outputChannel.appendLine(`Session files: ${files.length}`);
+      } else {
+        outputChannel.appendLine(`Sessions dir NOT FOUND: ${sessionsDir}`);
+      }
+
+      // 显示前3条消息的摘要
+      const msgs = messageStore.getMessages();
+      if (msgs.length > 0) {
+        outputChannel.appendLine("First 3 messages:");
+        for (const msg of msgs.slice(0, 3)) {
+          outputChannel.appendLine(
+            `  [${msg.id}] ${msg.role}: ${msg.content.substring(0, 60)}... (include=${msg.include}, images=${msg.images?.length || 0})`
+          );
+        }
+      } else {
+        outputChannel.appendLine("Message store is EMPTY.");
+      }
+      outputChannel.appendLine("===== END DIAGNOSTICS =====\n");
+
+      vscode.window.showInformationMessage(
+        `Continue-Doc: ${stats.total} messages loaded, ${stats.selected} selected. See Output panel for details.`
+      );
+    }
+  );
+
   context.subscriptions.push(
     generateCmd,
     publishCmd,
     configCmd,
     toggleCmd,
     selectSessionCmd,
-    refreshCmd
+    refreshCmd,
+    diagCmd
   );
 
   // ───────────────────────────────────────

@@ -9,9 +9,9 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Productivity",
-    "Documentation",
-    "AI"
+    "AI",
+    "Chat",
+    "Education"
   ],
   "keywords": [
     "continue",
@@ -107,6 +107,11 @@
       {
         "command": "continue-doc.refreshMessages",
         "title": "Refresh Messages",
+        "category": "Continue-Doc"
+      },
+      {
+        "command": "continue-doc.showDiagnostics",
+        "title": "Show Diagnostics",
         "category": "Continue-Doc"
       }
     ],
